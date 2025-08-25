@@ -8,7 +8,7 @@ const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
 const CORE_ROW = ["Attempts", "Assists", "Drawn Exclusions", "Steals", "Turnovers", "Shot Block", "Sprint Won"];
 const GOALIE_TOP = ["Saves", "Goals Against", "Bad Passes", "Goals"];
 const HIDDEN_TILE = "Ejections";
-const PENALTIES = "Penalties"; // global penalties stat for players
+const PENALTIES = "Penalties"; // player-level penalties
 
 // Opponent stats per quarter: Ejections + Penalties
 const OPP_QUARTERS = QUARTERS;
@@ -24,8 +24,8 @@ function baseCatsFor(isGoalie) {
 export default function App() {
   // ONLY user-added categories (extras)
   const [categoriesExtras, setCategoriesExtras] = useState([]); // persisted as wp_categories
-  const [players, setPlayers] = useState([]); // [{name, cap, isGoalie, isPreloaded, stats}]
-  const [opponents, setOpponents] = useState([]); // [{cap: 1..24, stats: {...}}]
+  const [players, setPlayers] = useState([]);                   // [{name, cap, isGoalie, isPreloaded, stats}]
+  const [opponents, setOpponents] = useState([]);               // [{cap: 1..24, stats: {...}}]
 
   // UI state
   const [showPlayerModal, setShowPlayerModal] = useState(false);
@@ -40,10 +40,11 @@ export default function App() {
 
   const [gameId, setGameId] = useState("");
 
-  // Per-player undo stacks & visual flash
+  // Undo stacks & flash
   const [historyByPlayer, setHistoryByPlayer] = useState({}); // { [playerName]: [{cat}] }
-  const [highlight, setHighlight] = useState(null); // {key, cat, mode, nonce}
-  // For opponent, we use key like "opp-<cap>"
+  const [historyByOpp, setHistoryByOpp] = useState({});       // { [capNumber]: [{cat}] }
+  const [highlight, setHighlight] = useState(null);           // { key, cat, mode, nonce }
+  // key is playerName or `opp-<cap>`
 
   // --- Load & migrate localStorage ---
   useEffect(() => {
@@ -126,7 +127,7 @@ export default function App() {
   const flashClass = (key, cat) => {
     if (!highlight || highlight.key !== key || highlight.cat !== cat) return "";
     if (highlight.mode === "undo") return "flash-red";
-    if (highlight.mode === "inc") return cat === PENALTIES || cat.endsWith("_Penalties") ? "flash-red" : "flash-green";
+    if (highlight.mode === "inc") return (cat === PENALTIES || cat.endsWith("_Penalties")) ? "flash-red" : "flash-green";
     return "";
   };
 
@@ -135,7 +136,7 @@ export default function App() {
     setHighlight({ key, cat, mode, nonce });
     setTimeout(() => {
       setHighlight(curr => (curr && curr.nonce === nonce ? null : curr));
-    }, 220);
+    }, 120); // match CSS duration
   };
 
   // --- Player stat ops ---
@@ -180,7 +181,23 @@ export default function App() {
     setFlash(`opp-${cap}`, cat, modeForFlash);
   };
 
-  const incOpp = (cap, cat) => bumpOpp(cap, cat, +1, "inc");
+  const incOpp = (cap, cat) => {
+    bumpOpp(cap, cat, +1, "inc");
+    setHistoryByOpp(h => ({
+      ...h,
+      [cap]: [...(h[cap] || []), { cat }]
+    }));
+  };
+
+  const undoOpp = (cap) => {
+    setHistoryByOpp(h => {
+      const stack = [...(h[cap] || [])];
+      if (stack.length === 0) return h;
+      const last = stack.pop();
+      bumpOpp(cap, last.cat, -1, "undo");
+      return { ...h, [cap]: stack };
+    });
+  };
 
   // --- Roster loaders ---
   const loadRoster = (rosterName) => {
@@ -442,14 +459,27 @@ export default function App() {
   // --- Opponent modal UI ---
   const OpponentStatsPanel = ({ cap, opp }) => {
     if (!opp) return null;
+    const hasUndo = !!(historyByOpp[cap] && historyByOpp[cap].length);
+
     return (
       <div className="space-y-4">
-        <div className="text-2xl font-bold" style={{ color: "var(--secondary)" }}>Opponent Cap #{cap}</div>
+        <div className="flex items-center justify-between">
+          <div className="text-2xl font-bold" style={{ color: "var(--secondary)" }}>Opponent Cap #{cap}</div>
+          <Button
+            onClick={() => undoOpp(cap)}
+            className={`bg-gray-800 text-white ${!hasUndo ? "opacity-50 cursor-not-allowed" : ""}`}
+            disabled={!hasUndo}
+          >
+            Undo
+          </Button>
+        </div>
 
         <div className="grid grid-cols-1 gap-3">
           {OPP_QUARTERS.map((q) => (
             <div key={q} className="flex items-center justify-between gap-3 border rounded-xl p-3">
-              <div className="font-semibold">{q === "Q1" ? "Quarter 1" : q === "Q2" ? "Quarter 2" : q === "Q3" ? "Quarter 3" : "Quarter 4"}</div>
+              <div className="font-semibold">
+                {q === "Q1" ? "Quarter 1" : q === "Q2" ? "Quarter 2" : q === "Q3" ? "Quarter 3" : "Quarter 4"}
+              </div>
               <div className="flex items-center gap-2">
                 <Button
                   onClick={() => incOpp(cap, OPP_EJ(q))}

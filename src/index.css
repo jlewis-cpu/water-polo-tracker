@@ -13,5 +13,5 @@
 
 @keyframes flashGreen { 0% { background-color: rgba(16,185,129,0.25); } 100% { background-color: transparent; } }
 @keyframes flashRed   { 0% { background-color: rgba(239,68,68,0.25); } 100% { background-color: transparent; } }
-.flash-green { animation: flashGreen 200ms ease-out; }
-.flash-red   { animation: flashRed 200ms ease-out; }
+.flash-green { animation: flashGreen 120ms ease-out; }
+.flash-red   { animation: flashRed 120ms ease-out; }
