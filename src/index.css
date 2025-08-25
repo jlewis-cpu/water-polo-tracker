@@ -1,0 +1,17 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --primary: #a6093d; --secondary: #16093d; }
+
+.btn { @apply px-3 py-2 rounded-xl font-semibold shadow transition select-none; }
+.btn-primary { background: var(--secondary); color: #fff; }
+.btn-ghost { @apply bg-transparent; }
+
+.card { @apply bg-white rounded-2xl shadow p-3; }
+
+@keyframes flashGreen { 0% { background-color: rgba(16,185,129,0.25); } 100% { background-color: transparent; } }
+@keyframes flashRed   { 0% { background-color: rgba(239,68,68,0.25); } 100% { background-color: transparent; } }
+.flash-green { animation: flashGreen 200ms ease-out; }
+.flash-red   { animation: flashRed 200ms ease-out; }
