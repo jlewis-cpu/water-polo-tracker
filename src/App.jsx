@@ -8,14 +8,18 @@ const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
 const CORE_ROW = ["Attempts", "Assists", "Drawn Exclusions", "Steals", "Turnovers", "Shot Block", "Sprint Won"];
 const GOALIE_TOP = ["Saves", "Goals Against", "Bad Passes", "Goals"];
 const HIDDEN_TILE = "Ejections";
+const PENALTIES = "Penalties"; // NEW
 
 // Helper: which fixed categories a player should have
 function baseCatsFor(isGoalie) {
-  return isGoalie ? [...GOALIE_TOP, ...CORE_ROW, HIDDEN_TILE] : [...QUARTERS, ...CORE_ROW, HIDDEN_TILE];
+  // include both Ejections and Penalties for all players
+  return isGoalie
+    ? [...GOALIE_TOP, ...CORE_ROW, HIDDEN_TILE, PENALTIES]
+    : [...QUARTERS, ...CORE_ROW, HIDDEN_TILE, PENALTIES];
 }
 
 export default function App() {
-  // IMPORTANT: categoriesExtras are ONLY user-added categories (not quarters/goalie/core/ejections)
+  // ONLY user-added categories (extras), not quarters/goalie/core/ejections/penalties
   const [categoriesExtras, setCategoriesExtras] = useState([]); // persisted as wp_categories
   const [players, setPlayers] = useState([]); // [{name, cap, isGoalie, isPreloaded, stats:{...}}]
 
@@ -31,9 +35,9 @@ export default function App() {
 
   const [gameId, setGameId] = useState("");
 
-  // Per-player undo stacks
+  // Per-player undo stacks & visual flash
   const [historyByPlayer, setHistoryByPlayer] = useState({}); // { [playerName]: [{cat}] }
-  const [highlight, setHighlight] = useState(null); // flash feedback
+  const [highlight, setHighlight] = useState(null); // {player, cat, mode, nonce}
 
   // --- Load & migrate localStorage ---
   useEffect(() => {
@@ -45,11 +49,16 @@ export default function App() {
       setPlayers(parsed.map(migratePlayer));
     }
 
-    // Clean saved categories so they only contain extras (no quarters/goalie/core/ejections)
+    // Clean saved categories so they only contain extras (no quarters/goalie/core/ejections/penalties)
     if (c) {
       const parsedC = JSON.parse(c);
       const filtered = parsedC.filter(
-        x => !QUARTERS.includes(x) && !GOALIE_TOP.includes(x) && !CORE_ROW.includes(x) && x !== HIDDEN_TILE
+        x =>
+          !QUARTERS.includes(x) &&
+          !GOALIE_TOP.includes(x) &&
+          !CORE_ROW.includes(x) &&
+          x !== HIDDEN_TILE &&
+          x !== PENALTIES
       );
       setCategoriesExtras(filtered);
       localStorage.setItem("wp_categories", JSON.stringify(filtered));
@@ -75,8 +84,26 @@ export default function App() {
     return { name: pl.name, cap: pl.cap ?? "", isGoalie, isPreloaded, stats: merged };
   }
 
+  // --- Flash helper: penalties flash RED on increment; all others GREEN on increment; undo always RED ---
+  const flashClass = (playerName, cat) => {
+    if (!highlight || highlight.player !== playerName || highlight.cat !== cat) return "";
+    if (highlight.mode === "undo") return "flash-red";
+    if (highlight.mode === "inc") {
+      return cat === PENALTIES ? "flash-red" : "flash-green";
+    }
+    return "";
+  };
+
   // --- Stat operations ---
-  const bump = (playerName, cat, delta, mode) => {
+  const setFlash = (playerName, cat, mode) => {
+    const nonce = Date.now();
+    setHighlight({ player: playerName, cat, mode, nonce });
+    setTimeout(() => {
+      setHighlight(curr => (curr && curr.nonce === nonce ? null : curr));
+    }, 220);
+  };
+
+  const bump = (playerName, cat, delta, modeForFlash) => {
     setPlayers(ps =>
       ps.map(p => {
         if (p.name !== playerName) return p;
@@ -84,11 +111,7 @@ export default function App() {
         return { ...p, stats: { ...p.stats, [cat]: next } };
       })
     );
-    const nonce = Date.now();
-    setHighlight({ player: playerName, cat, mode, nonce });
-    setTimeout(() => {
-      setHighlight(curr => (curr && curr.nonce === nonce ? null : curr));
-    }, 220);
+    setFlash(playerName, cat, modeForFlash);
   };
 
   const incrementStat = (playerName, cat) => {
@@ -108,9 +131,6 @@ export default function App() {
       return { ...h, [playerName]: stack };
     });
   };
-
-  const isHighlighted = (playerName, cat, mode) =>
-    highlight && highlight.player === playerName && highlight.cat === cat && highlight.mode === mode;
 
   // --- Roster loaders ---
   const loadRoster = (rosterName) => {
@@ -158,7 +178,8 @@ export default function App() {
       QUARTERS.includes(cat) ||
       GOALIE_TOP.includes(cat) ||
       CORE_ROW.includes(cat) ||
-      cat === HIDDEN_TILE
+      cat === HIDDEN_TILE ||
+      cat === PENALTIES
     ) return;
 
     const nextCats = [...categoriesExtras, cat];
@@ -178,7 +199,8 @@ export default function App() {
   const allHeaders = useMemo(() => {
     const set = new Set([
       ...categoriesExtras,
-      ...QUARTERS, ...GOALIE_TOP, ...CORE_ROW, HIDDEN_TILE
+      ...QUARTERS, ...GOALIE_TOP, ...CORE_ROW,
+      HIDDEN_TILE, PENALTIES
     ]);
     return ["Player", "Cap", ...Array.from(set)];
   }, [categoriesExtras]);
@@ -235,14 +257,32 @@ export default function App() {
               Undo
             </Button>
 
-            {/* Small red Ejections button */}
+            {/* Ejections (red) */}
             <Button
               onClick={() => incrementStat(player.name, HIDDEN_TILE)}
-              className="bg-red-600 text-white px-3 py-1 rounded-md"
+              className={[
+                "px-3 py-1 rounded-md text-white",
+                "bg-red-600",
+                flashClass(player.name, HIDDEN_TILE),
+              ].join(" ")}
               title="Add 1 Ejection"
               aria-label={`Add 1 Ejection for ${player.name}`}
             >
               Ejections: {player.stats?.[HIDDEN_TILE] ?? 0}
+            </Button>
+
+            {/* Penalties (darker red, flash RED on increment) */}
+            <Button
+              onClick={() => incrementStat(player.name, PENALTIES)}
+              className={[
+                "px-3 py-1 rounded-md text-white",
+                "bg-red-800",
+                flashClass(player.name, PENALTIES),
+              ].join(" ")}
+              title="Add 1 Penalty"
+              aria-label={`Add 1 Penalty for ${player.name}`}
+            >
+              Penalties: {player.stats?.[PENALTIES] ?? 0}
             </Button>
 
             {/* Remove only for non-preloaded players */}
@@ -258,7 +298,12 @@ export default function App() {
             <button
               key={c}
               onClick={() => incrementStat(player.name, c)}
-              className="w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center text-center select-none transition h-16 hover:shadow active:scale-[0.99]"
+              className={[
+                "w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center",
+                "text-center select-none transition h-16",
+                flashClass(player.name, c),
+                "hover:shadow active:scale-[0.99]",
+              ].join(" ")}
               title={`Add 1 to ${c}`}
               aria-label={`Add 1 to ${c} for ${player.name}`}
             >
@@ -274,7 +319,12 @@ export default function App() {
             <button
               key={c}
               onClick={() => incrementStat(player.name, c)}
-              className="w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center text-center select-none transition h-16 hover:shadow active:scale-[0.99]"
+              className={[
+                "w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center",
+                "text-center select-none transition h-16",
+                flashClass(player.name, c),
+                "hover:shadow active:scale-[0.99]",
+              ].join(" ")}
               title={`Add 1 to ${c}`}
               aria-label={`Add 1 to ${c} for ${player.name}`}
             >
@@ -299,7 +349,12 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => incrementStat(player.name, c)}
-                  className="w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center text-center select-none transition h-16 hover:shadow active:scale-[0.99]"
+                  className={[
+                    "w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center",
+                    "text-center select-none transition h-16",
+                    flashClass(player.name, c),
+                    "hover:shadow active:scale-[0.99]",
+                  ].join(" ")}
                   title={`Add 1 to ${c}`}
                   aria-label={`Add 1 to ${c} for ${player.name}`}
                 >
