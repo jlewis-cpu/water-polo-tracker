@@ -483,24 +483,31 @@ export default function App() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <header className="flex items-center gap-3 mb-6">
-        <img src="/logo.png" alt="Logo" className="h-12 w-12 object-contain" />
-        <div className="flex flex-col">
-          <h1 className="text-3xl font-bold" style={{ color: "var(--primary)" }}>Water Polo</h1>
-          {(!showStart && gameId) && (
-            <span className="text-sm text-gray-600">Game: {gameId}</span>
-          )}
-        </div>
-      </header>
 
-      {/* Controls row (NOTE: no Varsity/JV here; those live on the landing) */}
-      <div className="flex justify-end mb-6">
-        <div className="flex gap-2 flex-wrap">
-          <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
-          <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
-          <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
-        </div>
-      </div>
+   <header className="flex items-center justify-between mb-6">
+  {/* Left side: logo + title */}
+  <div className="flex items-center gap-3">
+    <img 
+      src="/logo.png" 
+      alt="Logo" 
+      className="h-14 w-14 object-contain" // tweak size here
+    />
+    <h1 className="text-3xl font-bold" style={{ color: "var(--primary)" }}>
+      Water Polo
+    </h1>
+    {(!showStart && gameId) && (
+      <span className="ml-2 text-sm text-gray-600">Game: {gameId}</span>
+    )}
+  </div>
+
+  {/* Right side: buttons */}
+  <div className="flex gap-2 flex-wrap">
+    <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
+    <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
+    <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
+  </div>
+</header>
+
 
       {/* Player Grid */}
       <Card className="shadow w-full mb-6">
