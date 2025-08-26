@@ -21,6 +21,11 @@ function baseCatsFor(isGoalie) {
     : [...QUARTERS, ...CORE_ROW, HIDDEN_TILE, PENALTIES];
 }
 
+// Simple id maker for events
+const eid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const fmtTime = (d) =>
+  new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
 export default function App() {
   // ONLY user-added categories (extras)
   const [categoriesExtras, setCategoriesExtras] = useState([]); // persisted as wp_categories
@@ -50,7 +55,12 @@ export default function App() {
   const [highlight, setHighlight] = useState(null);           // { key, cat, mode, nonce }
   // key is playerName or `opp-<cap>`
 
-  // --- Load & migrate localStorage (only for categories; players/opps will be set on "Start Game") ---
+  // Timeline
+  const [events, setEvents] = useState([]);              // [{id, ts, subjectType, subject, category, delta, remarks?}]
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState(null);
+
+  // --- Load & migrate localStorage (only categories and opponents template initially) ---
   useEffect(() => {
     const c = localStorage.getItem("wp_categories");
     if (c) {
@@ -66,14 +76,30 @@ export default function App() {
       setCategoriesExtras(filtered);
       localStorage.setItem("wp_categories", JSON.stringify(filtered));
     }
-    // fresh app session: opponents empty grid by default so the landing controls when a game begins
     setOpponents(makeEmptyOpponents());
+
+    // Try to load an existing in-progress session (players/opponents/events) ONLY if not starting fresh.
+    const p = localStorage.getItem("wp_players");
+    const o = localStorage.getItem("wp_opponents");
+    const e = localStorage.getItem("wp_events");
+    const g = localStorage.getItem("wp_gameId");
+    if (p && o && e && g) {
+      try {
+        setPlayers(JSON.parse(p));
+        setOpponents(JSON.parse(o));
+        setEvents(JSON.parse(e));
+        setGameId(g);
+        setShowStart(false); // continue current game
+      } catch {}
+    }
   }, []);
 
-  // Persist dynamic data each change
+  // Persist dynamic data on change
   useEffect(() => { localStorage.setItem("wp_players", JSON.stringify(players)); }, [players]);
   useEffect(() => { localStorage.setItem("wp_categories", JSON.stringify(categoriesExtras)); }, [categoriesExtras]);
   useEffect(() => { localStorage.setItem("wp_opponents", JSON.stringify(opponents)); }, [opponents]);
+  useEffect(() => { localStorage.setItem("wp_events", JSON.stringify(events)); }, [events]);
+  useEffect(() => { if (gameId) localStorage.setItem("wp_gameId", gameId); }, [gameId]);
 
   function migratePlayer(pl) {
     const isGoalie = !!pl.isGoalie;
@@ -98,21 +124,55 @@ export default function App() {
     return list;
   }
 
-  // --- Flash helper: penalties flash RED on increment; all others GREEN on increment; undo always RED ---
+  // --- Flash helper (fast) ---
   const flashClass = (key, cat) => {
     if (!highlight || highlight.key !== key || highlight.cat !== cat) return "";
     if (highlight.mode === "undo") return "flash-red";
     if (highlight.mode === "inc") return (cat === PENALTIES || String(cat).endsWith("_Penalties")) ? "flash-red" : "flash-green";
     return "";
   };
-
   const setFlash = (key, cat, mode) => {
     const nonce = Date.now();
     setHighlight({ key, cat, mode, nonce });
     setTimeout(() => {
       setHighlight(curr => (curr && curr.nonce === nonce ? null : curr));
-    }, 120); // match CSS duration from index.css
+    }, 120);
   };
+
+  // --- Timeline helpers ---
+  const recordEvent = (subjectType, subject, category, delta) => {
+    const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
+    setEvents(prev => [ev, ...prev]); // newest first
+    // If nothing is selected, auto-select this new event (nice during live use)
+    setSelectedEventId(prevId => prevId ?? ev.id);
+  };
+
+  const selectedEvent = events.find(e => e.id === selectedEventId) || null;
+  const updateSelectedRemarks = (text) => {
+    setEvents(list => list.map(ev => ev.id === selectedEventId ? { ...ev, remarks: text } : ev));
+  };
+  const removeEvent = (id) => {
+    setEvents(list => list.filter(ev => ev.id !== id));
+    if (selectedEventId === id) setSelectedEventId(null);
+  };
+
+// Remove the newest matching +1 event from the timeline
+const removeLatestEvent = (subjectType, subject, category) => {
+  setEvents(prev => {
+    const idx = prev.findIndex(
+      ev =>
+        ev.subjectType === subjectType &&
+        ev.subject === subject &&
+        ev.category === category &&
+        ev.delta === +1
+    );
+    if (idx === -1) return prev; // nothing to remove
+    const next = prev.slice();
+    next.splice(idx, 1);
+    return next;
+  });
+};
+
 
   // --- Player stat ops ---
   const bump = (playerName, cat, delta, modeForFlash) => {
@@ -132,17 +192,21 @@ export default function App() {
       ...h,
       [playerName]: [...(h[playerName] || []), { cat }]
     }));
+    recordEvent("player", playerName, cat, +1);
   };
 
   const undoForPlayer = (playerName) => {
-    setHistoryByPlayer(h => {
-      const stack = [...(h[playerName] || [])];
-      if (stack.length === 0) return h;
-      const last = stack.pop();
-      bump(playerName, last.cat, -1, "undo");
-      return { ...h, [playerName]: stack };
-    });
-  };
+  setHistoryByPlayer(h => {
+    const stack = [...(h[playerName] || [])];
+    if (stack.length === 0) return h;
+    const last = stack.pop();
+    bump(playerName, last.cat, -1, "undo");
+    // remove the newest matching +1 from timeline
+    removeLatestEvent("player", playerName, last.cat);
+    return { ...h, [playerName]: stack };
+  });
+};
+
 
   // --- Opponent stat ops ---
   const bumpOpp = (cap, cat, delta, modeForFlash) => {
@@ -162,18 +226,21 @@ export default function App() {
       ...h,
       [cap]: [...(h[cap] || []), { cat }]
     }));
+    recordEvent("opponent", String(cap), cat, +1);
   };
 
-  
-  const undoOpp = (cap) => {
-    setHistoryByOpp(h => {
-      const stack = [...(h[cap] || [])];
-      if (stack.length === 0) return h;
-      const last = stack.pop();
-      bumpOpp(cap, last.cat, -1, "undo");
-      return { ...h, [cap]: stack };
-    });
-  };
+const undoOpp = (cap) => {
+  setHistoryByOpp(h => {
+    const stack = [...(h[cap] || [])];
+    if (stack.length === 0) return h;
+    const last = stack.pop();
+    bumpOpp(cap, last.cat, -1, "undo");
+    // remove the newest matching +1 from timeline
+    removeLatestEvent("opponent", String(cap), last.cat);
+    return { ...h, [cap]: stack };
+  });
+};
+
 
   // --- Roster loaders (used only when starting a game) ---
   const buildRoster = (which) => {
@@ -184,16 +251,17 @@ export default function App() {
       isGoalie: !!pl.isGoalie,
       isPreloaded: true,
       stats: Object.fromEntries(baseCatsFor(!!pl.isGoalie).map(c => [c, 0])),
-    }));
+    })).map(migratePlayer);
   };
 
   // --- Start / End game ---
   const startGame = () => {
-    // Load chosen roster fresh, reset opponents & history stacks, set game id, close landing
-    setPlayers(buildRoster(rosterChoice).map(migratePlayer));
+    setPlayers(buildRoster(rosterChoice));
     setOpponents(makeEmptyOpponents());
     setHistoryByPlayer({});
     setHistoryByOpp({});
+    setEvents([]);
+    setSelectedEventId(null);
     setGameId(pendingGameId.trim());
     setShowStart(false);
     setSelected(null);
@@ -204,7 +272,7 @@ export default function App() {
     const ok = window.confirm("End game and download CSV?");
     if (!ok) return;
     exportCSV();
-    // (Deliberately do not reset in case you want to export again or review.)
+    // keep state so you can review/export again if needed
   };
 
   // --- Category ops (EXTRAS ONLY) ---
@@ -254,39 +322,63 @@ export default function App() {
   }, []);
 
   const exportCSV = () => {
-    // Players table
-    const rowsPlayers = players.map(p => [
-      p.name,
-      p.cap || "",
-      ...playerHeaders.slice(2).map(h => (p.stats && p.stats[h] != null ? p.stats[h] : ""))
-    ]);
-
-    // Opponent table
-    const rowsOpponents = opponents.map(o => {
-      const row = [String(o.cap)];
-      OPP_QUARTERS.forEach(q => {
-        row.push(o.stats[OPP_EJ(q)] ?? 0, o.stats[OPP_PE(q)] ?? 0);
-      });
-      return row;
-    });
-
-    // Combine sections with a blank line in between
-    const csv = [
-      playerHeaders.join(","),
-      ...rowsPlayers.map(r => r.join(",")),
-      "", // blank line
-      opponentHeaders.join(","),
-      ...rowsOpponents.map(r => r.join(",")),
-    ].join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = (gameId || "game") + ".csv";
-    a.click();
-    URL.revokeObjectURL(url);
+  // --- helpers for CSV escaping ---
+  const csvEscape = (val) => {
+    const s = String(val ?? "");
+    // wrap in quotes if it contains comma, quote, or newline; escape quotes
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
   };
+  const row = (arr) => arr.map(csvEscape).join(",");
+
+  // Players table
+  const rowsPlayers = players.map(p => [
+    p.name,
+    p.cap || "",
+    ...playerHeaders.slice(2).map(h => (p.stats && p.stats[h] != null ? p.stats[h] : ""))
+  ]);
+
+  // Opponent table
+  const rowsOpponents = opponents.map(o => {
+    const r = [String(o.cap)];
+    OPP_QUARTERS.forEach(q => {
+      r.push(o.stats[OPP_EJ(q)] ?? 0, o.stats[OPP_PE(q)] ?? 0);
+    });
+    return r;
+  });
+
+  // Timeline table (new third section)
+  const timelineHeaders = ["Time", "Type", "Subject", "Category", "Delta", "Remarks"];
+  const rowsTimeline = events.map(ev => [
+    fmtTime(ev.ts),
+    ev.subjectType,                           // "player" | "opponent"
+    ev.subjectType === "player" ? ev.subject : `#${ev.subject}`,
+    ev.category,
+    ev.delta > 0 ? "+1" : "-1",
+    ev.remarks || ""
+  ]);
+
+  // Build CSV with blank lines between sections
+  const csvParts = [
+    row(playerHeaders),
+    ...rowsPlayers.map(row),
+    "",
+    row(opponentHeaders),
+    ...rowsOpponents.map(row),
+    "",
+    row(timelineHeaders),
+    ...rowsTimeline.map(row),
+  ];
+
+  const csv = csvParts.join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = (gameId || "game") + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
   const selectedPlayer = players.find(p => p.name === selected);
   const selectedOppObj = opponents.find(o => o.cap === selectedOpp);
@@ -481,33 +573,93 @@ export default function App() {
     );
   };
 
+  // --- Timeline modal UI ---
+  const TimelineModal = () => {
+    return (
+      <Modal open={showTimeline} title="Timeline" onClose={() => setShowTimeline(false)}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Left: event list */}
+          <div className="max-h-[70vh] overflow-auto border rounded-xl">
+            {events.length === 0 ? (
+              <div className="p-4 text-gray-500">No events yet. Start tapping stats to see them here.</div>
+            ) : (
+              <ul>
+                {events.map(ev => (
+                  <li
+                    key={ev.id}
+                    onClick={() => setSelectedEventId(ev.id)}
+                    className={[
+                      "px-3 py-2 border-b cursor-pointer flex items-center justify-between",
+                      selectedEventId === ev.id ? "bg-gray-100" : "hover:bg-gray-50"
+                    ].join(" ")}
+                    title="Select to add remarks"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">{fmtTime(ev.ts)}</span>
+                      <span className="font-medium">
+                        {ev.subjectType === "player"
+                          ? `Player ${ev.subject}`
+                          : `Opp #${ev.subject}`}
+                      </span>
+                      <span className="text-sm text-gray-700">• {ev.category}</span>
+                    </div>
+                    <div className={`font-bold ${ev.delta > 0 ? "text-green-700" : "text-red-700"}`}>
+                      {ev.delta > 0 ? "+1" : "-1"}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Right: remarks editor */}
+          <div className="flex flex-col">
+            <div className="mb-2 font-semibold" style={{ color: "var(--secondary)" }}>Remarks</div>
+            {selectedEvent ? (
+              <>
+                <div className="mb-2 text-sm text-gray-600">
+                  {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : `Opp #${selectedEvent.subject}`} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
+                </div>
+                <textarea
+                  className="border rounded-xl p-3 min-h-[200px]"
+                  placeholder="Type notes about the play…"
+                  value={selectedEvent.remarks || ""}
+                  onChange={(e) => updateSelectedRemarks(e.target.value)}
+                />
+                <div className="flex justify-between items-center mt-3">
+                  <div className="text-xs text-gray-500">Saved locally</div>
+                  <Button className="btn-ghost" onClick={() => removeEvent(selectedEvent.id)}>Delete Entry</Button>
+                </div>
+              </>
+            ) : (
+              <div className="text-gray-500">Select an event from the list to add remarks.</div>
+            )}
+          </div>
+        </div>
+      </Modal>
+    );
+  };
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
+      {/* Header row: left logo/title, right buttons */}
+      <header className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <img src="/logo.png" alt="Logo" className="h-14 w-14 object-contain" />
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold" style={{ color: "var(--primary)" }}>Water Polo</h1>
+            {(!showStart && gameId) && (
+              <span className="text-sm text-gray-600">Game: {gameId}</span>
+            )}
+          </div>
+        </div>
 
-   <header className="flex items-center justify-between mb-6">
-  {/* Left side: logo + title */}
-  <div className="flex items-center gap-3">
-    <img 
-      src="/logo.png" 
-      alt="Logo" 
-      className="h-14 w-14 object-contain" // tweak size here
-    />
-    <h1 className="text-3xl font-bold" style={{ color: "var(--primary)" }}>
-      Water Polo
-    </h1>
-    {(!showStart && gameId) && (
-      <span className="ml-2 text-sm text-gray-600">Game: {gameId}</span>
-    )}
-  </div>
-
-  {/* Right side: buttons */}
-  <div className="flex gap-2 flex-wrap">
-    <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
-    <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
-    <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
-  </div>
-</header>
-
+        <div className="flex gap-2 flex-wrap">
+          <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
+          <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
+          <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
+        </div>
+      </header>
 
       {/* Player Grid */}
       <Card className="shadow w-full mb-6">
@@ -554,8 +706,20 @@ export default function App() {
         </CardContent>
       </Card>
 
+{/* Timeline launcher (centered, primary color) */}
+<div className="mt-4 flex justify-center">
+  <Button
+    onClick={() => setShowTimeline(true)}
+    className="text-white px-4 py-2 rounded-lg"
+    style={{ background: "var(--primary)" }}
+  >
+    Timeline
+  </Button>
+</div>
+
+
       {/* Landing / Start Game Overlay */}
-      <Modal open={showStart} title="Start Game" onClose={() => { /* prevent closing to avoid accidental bypass */ }}>
+      <Modal open={showStart} title="Start Game" onClose={() => { /* keep explicit flow */ }}>
         <div className="space-y-4">
           <div>
             <label className="block mb-1 font-semibold" style={{ color: "var(--secondary)" }}>Game Identifier</label>
@@ -586,7 +750,7 @@ export default function App() {
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button className="btn-ghost" onClick={() => { /* no cancel to keep flow explicit */ }}>Cancel</Button>
+            <Button className="btn-ghost" onClick={() => { /* optional cancel */ }}>Cancel</Button>
             <Button
               className="btn-primary"
               onClick={startGame}
@@ -696,6 +860,9 @@ export default function App() {
       <Modal open={!!selectedOpp} title="Opponent Stats" onClose={() => setSelectedOpp(null)}>
         {selectedOppObj ? <OpponentStatsPanel cap={selectedOppObj.cap} opp={selectedOppObj} /> : null}
       </Modal>
+
+      {/* Timeline Modal */}
+      <TimelineModal />
     </div>
   );
 }
