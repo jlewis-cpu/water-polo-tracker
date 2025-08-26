@@ -27,6 +27,12 @@ export default function App() {
   const [players, setPlayers] = useState([]);                   // [{name, cap, isGoalie, isPreloaded, stats}]
   const [opponents, setOpponents] = useState([]);               // [{cap: 1..24, stats: {...}}]
 
+  // Game flow
+  const [showStart, setShowStart] = useState(true);
+  const [rosterChoice, setRosterChoice] = useState("VARSITY");
+  const [pendingGameId, setPendingGameId] = useState("");
+  const [gameId, setGameId] = useState("");
+
   // UI state
   const [showPlayerModal, setShowPlayerModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
@@ -38,26 +44,15 @@ export default function App() {
   const [newPlayerGoalie, setNewPlayerGoalie] = useState(false);
   const [newCategory, setNewCategory] = useState("");
 
-  const [gameId, setGameId] = useState("");
-
   // Undo stacks & flash
   const [historyByPlayer, setHistoryByPlayer] = useState({}); // { [playerName]: [{cat}] }
   const [historyByOpp, setHistoryByOpp] = useState({});       // { [capNumber]: [{cat}] }
   const [highlight, setHighlight] = useState(null);           // { key, cat, mode, nonce }
   // key is playerName or `opp-<cap>`
 
-  // --- Load & migrate localStorage ---
+  // --- Load & migrate localStorage (only for categories; players/opps will be set on "Start Game") ---
   useEffect(() => {
-    const p = localStorage.getItem("wp_players");
     const c = localStorage.getItem("wp_categories");
-    const o = localStorage.getItem("wp_opponents");
-
-    if (p) {
-      const parsed = JSON.parse(p);
-      setPlayers(parsed.map(migratePlayer));
-    }
-
-    // Clean categories -> only extras
     if (c) {
       const parsedC = JSON.parse(c);
       const filtered = parsedC.filter(
@@ -71,15 +66,11 @@ export default function App() {
       setCategoriesExtras(filtered);
       localStorage.setItem("wp_categories", JSON.stringify(filtered));
     }
-
-    if (o) {
-      const parsedO = JSON.parse(o);
-      setOpponents(migrateOpponents(parsedO));
-    } else {
-      setOpponents(makeEmptyOpponents());
-    }
+    // fresh app session: opponents empty grid by default so the landing controls when a game begins
+    setOpponents(makeEmptyOpponents());
   }, []);
 
+  // Persist dynamic data each change
   useEffect(() => { localStorage.setItem("wp_players", JSON.stringify(players)); }, [players]);
   useEffect(() => { localStorage.setItem("wp_categories", JSON.stringify(categoriesExtras)); }, [categoriesExtras]);
   useEffect(() => { localStorage.setItem("wp_opponents", JSON.stringify(opponents)); }, [opponents]);
@@ -107,27 +98,11 @@ export default function App() {
     return list;
   }
 
-  function migrateOpponents(arr) {
-    const base = makeEmptyOpponents();
-    const byCap = new Map(base.map(o => [o.cap, o]));
-    (arr || []).forEach(o => {
-      const target = byCap.get(o.cap);
-      if (!target) return;
-      const merged = { ...(o.stats || {}) };
-      OPP_QUARTERS.forEach(q => {
-        if (merged[OPP_EJ(q)] == null) merged[OPP_EJ(q)] = 0;
-        if (merged[OPP_PE(q)] == null) merged[OPP_PE(q)] = 0;
-      });
-      target.stats = merged;
-    });
-    return Array.from(byCap.values());
-  }
-
   // --- Flash helper: penalties flash RED on increment; all others GREEN on increment; undo always RED ---
   const flashClass = (key, cat) => {
     if (!highlight || highlight.key !== key || highlight.cat !== cat) return "";
     if (highlight.mode === "undo") return "flash-red";
-    if (highlight.mode === "inc") return (cat === PENALTIES || cat.endsWith("_Penalties")) ? "flash-red" : "flash-green";
+    if (highlight.mode === "inc") return (cat === PENALTIES || String(cat).endsWith("_Penalties")) ? "flash-red" : "flash-green";
     return "";
   };
 
@@ -136,7 +111,7 @@ export default function App() {
     setHighlight({ key, cat, mode, nonce });
     setTimeout(() => {
       setHighlight(curr => (curr && curr.nonce === nonce ? null : curr));
-    }, 120); // match CSS duration
+    }, 120); // match CSS duration from index.css
   };
 
   // --- Player stat ops ---
@@ -189,6 +164,7 @@ export default function App() {
     }));
   };
 
+  const [historyByOpp, setHistoryByOpp] = useState({});
   const undoOpp = (cap) => {
     setHistoryByOpp(h => {
       const stack = [...(h[cap] || [])];
@@ -199,41 +175,37 @@ export default function App() {
     });
   };
 
-  // --- Roster loaders ---
-  const loadRoster = (rosterName) => {
-    const list = rosterName === "VARSITY" ? VARSITY : JV;
-    const hydrated = list.map(pl => ({
+  // --- Roster loaders (used only when starting a game) ---
+  const buildRoster = (which) => {
+    const list = which === "VARSITY" ? VARSITY : JV;
+    return list.map(pl => ({
       name: pl.name,
       cap: pl.cap || "",
       isGoalie: !!pl.isGoalie,
       isPreloaded: true,
       stats: Object.fromEntries(baseCatsFor(!!pl.isGoalie).map(c => [c, 0])),
     }));
-    setPlayers(hydrated);
-    setSelected(null);
-    setHistoryByPlayer({});
   };
 
-  // --- Player ops ---
-  const openAddPlayer = () => {
-    setNewPlayerName("");
-    setNewPlayerCap("");
-    setNewPlayerGoalie(false);
-    setShowPlayerModal(true);
+  // --- Start / End game ---
+  const startGame = () => {
+    // Load chosen roster fresh, reset opponents & history stacks, set game id, close landing
+    setPlayers(buildRoster(rosterChoice).map(migratePlayer));
+    setOpponents(makeEmptyOpponents());
+    setHistoryByPlayer({});
+    setHistoryByOpp({});
+    setGameId(pendingGameId.trim());
+    setShowStart(false);
+    setSelected(null);
+    setSelectedOpp(null);
   };
-  const confirmAddPlayer = () => {
-    const name = newPlayerName.trim();
-    const cap = newPlayerCap.trim();
-    const isGoalie = !!newPlayerGoalie;
-    if (!name || players.some(p => p.name === name)) return;
-    setPlayers([...players, {
-      name, cap, isGoalie, isPreloaded: false,
-      stats: Object.fromEntries(baseCatsFor(isGoalie).map(c => [c, 0])),
-    }]);
-    setShowPlayerModal(false);
+
+  const endGame = () => {
+    const ok = window.confirm("End game and download CSV?");
+    if (!ok) return;
+    exportCSV();
+    // (Deliberately do not reset in case you want to export again or review.)
   };
-  const removePlayer = (name) => setPlayers(players.filter(p => p.name !== name));
-  const updateCap = (name, cap) => { setPlayers(ps => ps.map(p => (p.name === name ? { ...p, cap } : p))); };
 
   // --- Category ops (EXTRAS ONLY) ---
   const openAddCategory = () => { setNewCategory(""); setShowCategoryModal(true); };
@@ -495,7 +467,7 @@ export default function App() {
                   onClick={() => incOpp(cap, OPP_PE(q))}
                   className={[
                     "px-3 py-1 rounded-md text-white",
-                    "bg-red-800", // darker red
+                    "bg-red-800",
                     flashClass(`opp-${cap}`, OPP_PE(q)), // Penalties flash RED on inc
                   ].join(" ")}
                 >
@@ -513,27 +485,20 @@ export default function App() {
     <div className="p-6 max-w-6xl mx-auto">
       <header className="flex items-center gap-3 mb-6">
         <img src="/logo.png" alt="Logo" className="h-12 w-12 object-contain" />
-        <h1 className="text-3xl font-bold" style={{ color: "var(--primary)" }}>Water Polo</h1>
+        <div className="flex flex-col">
+          <h1 className="text-3xl font-bold" style={{ color: "var(--primary)" }}>Water Polo</h1>
+          {(!showStart && gameId) && (
+            <span className="text-sm text-gray-600">Game: {gameId}</span>
+          )}
+        </div>
       </header>
 
-      {/* Controls row */}
+      {/* Controls row (NOTE: no Varsity/JV here; those live on the landing) */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-3 mb-6">
-        <div className="flex-1">
-          <label className="block mb-1 font-semibold" style={{ color: "var(--secondary)" }}>Game Identifier</label>
-          <input
-            value={gameId}
-            onChange={e => setGameId(e.target.value)}
-            placeholder="e.g., at South High School"
-            className="border-2 rounded-xl px-3 py-2 w-full"
-          />
-        </div>
-
         <div className="flex gap-2 sm:self-end flex-wrap">
-          <Button className="btn-primary" onClick={() => loadRoster("VARSITY")}>Varsity</Button>
-          <Button className="btn-primary" onClick={() => loadRoster("JV")}>JV</Button>
-          <Button className="btn-primary" onClick={openAddPlayer}>Add Player</Button>
-          <Button className="btn-primary" onClick={openAddCategory}>Add Category</Button>
-          <Button onClick={exportCSV} className="bg-gray-800 text-white">Export CSV</Button>
+          <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
+          <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
+          <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
         </div>
       </div>
 
@@ -541,7 +506,7 @@ export default function App() {
       <Card className="shadow w-full mb-6">
         <CardContent>
           {players.length === 0 ? (
-            <div className="text-gray-500">Choose Varsity/JV or add players to begin.</div>
+            <div className="text-gray-500">Start a game from the landing screen to load a roster.</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {players.map((p) => (
@@ -582,6 +547,50 @@ export default function App() {
         </CardContent>
       </Card>
 
+      {/* Landing / Start Game Overlay */}
+      <Modal open={showStart} title="Start Game" onClose={() => { /* prevent closing to avoid accidental bypass */ }}>
+        <div className="space-y-4">
+          <div>
+            <label className="block mb-1 font-semibold" style={{ color: "var(--secondary)" }}>Game Identifier</label>
+            <input
+              value={pendingGameId}
+              onChange={e => setPendingGameId(e.target.value)}
+              placeholder="e.g., at South High School"
+              className="border-2 rounded-xl px-3 py-2 w-full"
+            />
+          </div>
+
+          <div>
+            <div className="mb-2 font-semibold" style={{ color: "var(--secondary)" }}>Choose Roster</div>
+            <div className="flex gap-2">
+              <Button
+                className={`btn-primary ${rosterChoice === "VARSITY" ? "" : "opacity-60"}`}
+                onClick={() => setRosterChoice("VARSITY")}
+              >
+                Varsity
+              </Button>
+              <Button
+                className={`btn-primary ${rosterChoice === "JV" ? "" : "opacity-60"}`}
+                onClick={() => setRosterChoice("JV")}
+              >
+                JV
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button className="btn-ghost" onClick={() => { /* no cancel to keep flow explicit */ }}>Cancel</Button>
+            <Button
+              className="btn-primary"
+              onClick={startGame}
+              disabled={!rosterChoice}
+            >
+              Start Game
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Add Player Modal */}
       <Modal open={showPlayerModal} title="Add Player" onClose={() => setShowPlayerModal(false)}>
         <div className="space-y-3">
@@ -615,7 +624,22 @@ export default function App() {
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <Button className="btn-ghost" onClick={() => setShowPlayerModal(false)}>Cancel</Button>
-            <Button className="btn-primary" onClick={confirmAddPlayer}>Add Player</Button>
+            <Button
+              className="btn-primary"
+              onClick={() => {
+                const name = newPlayerName.trim();
+                const cap = newPlayerCap.trim();
+                const isGoalie = !!newPlayerGoalie;
+                if (!name || players.some(p => p.name === name)) return;
+                setPlayers([...players, {
+                  name, cap, isGoalie, isPreloaded: false,
+                  stats: Object.fromEntries(baseCatsFor(isGoalie).map(c => [c, 0])),
+                }]);
+                setShowPlayerModal(false);
+              }}
+            >
+              Add Player
+            </Button>
           </div>
         </div>
       </Modal>
@@ -634,7 +658,24 @@ export default function App() {
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <Button className="btn-ghost" onClick={() => setShowCategoryModal(false)}>Cancel</Button>
-            <Button className="btn-primary" onClick={confirmAddCategory}>Add Category</Button>
+            <Button className="btn-primary" onClick={() => {
+              const cat = newCategory.trim();
+              if (
+                !cat ||
+                categoriesExtras.includes(cat) ||
+                QUARTERS.includes(cat) ||
+                GOALIE_TOP.includes(cat) ||
+                CORE_ROW.includes(cat) ||
+                cat === HIDDEN_TILE ||
+                cat === PENALTIES
+              ) return;
+              const nextCats = [...categoriesExtras, cat];
+              setCategoriesExtras(nextCats);
+              setPlayers(players.map(p => ({ ...p, stats: { ...p.stats, [cat]: 0 } })));
+              setShowCategoryModal(false);
+            }}>
+              Add Category
+            </Button>
           </div>
         </div>
       </Modal>
