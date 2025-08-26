@@ -495,7 +495,7 @@ export default function App() {
 
       {/* Controls row (NOTE: no Varsity/JV here; those live on the landing) */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-3 mb-6">
-        <div className="flex gap-2 sm:self-end flex-wrap">
+        <div className="flex gap-2 flex-wrap justify-end">
           <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
           <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
           <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
