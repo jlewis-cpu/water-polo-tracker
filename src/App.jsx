@@ -164,7 +164,7 @@ export default function App() {
     }));
   };
 
-  const [historyByOpp, setHistoryByOpp] = useState({});
+  
   const undoOpp = (cap) => {
     setHistoryByOpp(h => {
       const stack = [...(h[cap] || [])];
