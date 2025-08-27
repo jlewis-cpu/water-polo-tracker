@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import Button from "./components/Button";
 import { Card, CardContent } from "./components/Card";
 import Modal from "./components/Modal";
@@ -59,40 +59,45 @@ export default function App() {
   const [events, setEvents] = useState([]);              // [{id, ts, subjectType, subject, category, delta, remarks?}]
   const [showTimeline, setShowTimeline] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState(null);
+  const [remarksDraft, setRemarksDraft] = useState("");
 
   // --- Load & migrate localStorage (only categories and opponents template initially) ---
-  useEffect(() => {
-    const c = localStorage.getItem("wp_categories");
-    if (c) {
-      const parsedC = JSON.parse(c);
-      const filtered = parsedC.filter(
-        x =>
-          !QUARTERS.includes(x) &&
-          !GOALIE_TOP.includes(x) &&
-          !CORE_ROW.includes(x) &&
-          x !== HIDDEN_TILE &&
-          x !== PENALTIES
-      );
-      setCategoriesExtras(filtered);
-      localStorage.setItem("wp_categories", JSON.stringify(filtered));
-    }
-    setOpponents(makeEmptyOpponents());
+useEffect(() => {
+  // Load categories, filter out core/goalie/quarters
+  const c = localStorage.getItem("wp_categories");
+  if (c) {
+    const parsedC = JSON.parse(c);
+    const filtered = parsedC.filter(
+      x =>
+        !QUARTERS.includes(x) &&
+        !GOALIE_TOP.includes(x) &&
+        !CORE_ROW.includes(x) &&
+        x !== HIDDEN_TILE &&
+        x !== PENALTIES
+    );
+    setCategoriesExtras(filtered);
+    localStorage.setItem("wp_categories", JSON.stringify(filtered));
+  }
 
-    // Try to load an existing in-progress session (players/opponents/events) ONLY if not starting fresh.
-    const p = localStorage.getItem("wp_players");
-    const o = localStorage.getItem("wp_opponents");
-    const e = localStorage.getItem("wp_events");
-    const g = localStorage.getItem("wp_gameId");
-    if (p && o && e && g) {
-      try {
-        setPlayers(JSON.parse(p));
-        setOpponents(JSON.parse(o));
-        setEvents(JSON.parse(e));
-        setGameId(g);
-        setShowStart(false); // continue current game
-      } catch {}
-    }
-  }, []);
+  // Start with empty opponents grid
+  setOpponents(makeEmptyOpponents());
+
+  // Try to resume in-progress session (optional)
+  const p = localStorage.getItem("wp_players");
+  const o = localStorage.getItem("wp_opponents");
+  const e = localStorage.getItem("wp_events");
+  const g = localStorage.getItem("wp_gameId");
+  if (p && o && e && g) {
+    try {
+      setPlayers(JSON.parse(p));
+      setOpponents(JSON.parse(o));
+      setEvents(JSON.parse(e));
+      setGameId(g);
+      setShowStart(false);
+    } catch {}
+  }
+}, []); // ← only ONE effect here
+
 
   // Persist dynamic data on change
   useEffect(() => { localStorage.setItem("wp_players", JSON.stringify(players)); }, [players]);
@@ -151,6 +156,7 @@ const resetToLanding = () => {
   setHistoryByPlayer({});
   setHistoryByOpp({});
   setSelected(null);
+  setRemarksDraft("");
   setSelectedOpp(null);
   setGameId("");
   setPendingGameId("");
@@ -160,11 +166,15 @@ const resetToLanding = () => {
 
   // --- Timeline helpers ---
   const recordEvent = (subjectType, subject, category, delta) => {
-    const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
-    setEvents(prev => [ev, ...prev]); // newest first
-    // If nothing is selected, auto-select this new event (nice during live use)
-    setSelectedEventId(prevId => prevId ?? ev.id);
-  };
+  const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
+  setEvents(prev => [ev, ...prev]); // newest first
+  // If nothing is selected yet, select this new event and reset draft once.
+  if (selectedEventId == null) {
+    setSelectedEventId(ev.id);
+    setRemarksDraft("");
+  }
+};
+
 
   const selectedEvent = events.find(e => e.id === selectedEventId) || null;
   const updateSelectedRemarks = (text) => {
@@ -172,8 +182,20 @@ const resetToLanding = () => {
   };
   const removeEvent = (id) => {
     setEvents(list => list.filter(ev => ev.id !== id));
-    if (selectedEventId === id) setSelectedEventId(null);
+     if (selectedEventId === id) {
+   setSelectedEventId(null);
+   setRemarksDraft("");
+ }
   };
+
+const saveRemarks = () => {
+  if (!selectedEventId) return;
+  const text = remarksDraft;
+  setEvents(list =>
+    list.map(ev => (ev.id === selectedEventId ? { ...ev, remarks: text } : ev))
+  );
+};
+
 
 // Remove the newest matching +1 event from the timeline
 const removeLatestEvent = (subjectType, subject, category) => {
@@ -281,6 +303,7 @@ const undoOpp = (cap) => {
     setHistoryByOpp({});
     setEvents([]);
     setSelectedEventId(null);
+    setRemarksDraft("");
     setGameId(pendingGameId.trim());
     setShowStart(false);
     setSelected(null);
@@ -592,72 +615,149 @@ const undoOpp = (cap) => {
     );
   };
 
-  // --- Timeline modal UI ---
-  const TimelineModal = () => {
-    return (
-      <Modal open={showTimeline} title="Timeline" onClose={() => setShowTimeline(false)}>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Left: event list */}
-          <div className="max-h-[70vh] overflow-auto border rounded-xl">
-            {events.length === 0 ? (
-              <div className="p-4 text-gray-500">No events yet. Start tapping stats to see them here.</div>
-            ) : (
-              <ul>
-                {events.map(ev => (
-                  <li
-                    key={ev.id}
-                    onClick={() => setSelectedEventId(ev.id)}
-                    className={[
-                      "px-3 py-2 border-b cursor-pointer flex items-center justify-between",
-                      selectedEventId === ev.id ? "bg-gray-100" : "hover:bg-gray-50"
-                    ].join(" ")}
-                    title="Select to add remarks"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500">{fmtTime(ev.ts)}</span>
-                      <span className="font-medium">
-                        {ev.subjectType === "player"
-                          ? `Player ${ev.subject}`
-                          : `Opp #${ev.subject}`}
-                      </span>
-                      <span className="text-sm text-gray-700">• {ev.category}</span>
-                    </div>
-                    <div className={`font-bold ${ev.delta > 0 ? "text-green-700" : "text-red-700"}`}>
-                      {ev.delta > 0 ? "+1" : "-1"}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+// Ultra-simple, click-safe modal for debugging and production use
+function SafeModal({ open, title, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[1000]">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/40"
+        onClick={() => {
+          console.log("Backdrop click");
+          onClose?.();
+        }}
+      />
+      {/* Dialog */}
+      <div
+        className="absolute inset-0 flex items-center justify-center"
+        // pointer-events on wrapper are enabled (default); dialog is clickable
+      >
+        <div
+          className="relative bg-white rounded-xl shadow-2xl max-w-3xl w-[95%] p-4 outline-none"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold">{title}</h2>
+            <button
+              type="button"
+              onClick={() => {
+                console.log("X click");
+                onClose?.();
+              }}
+              aria-label="Close"
+              className="rounded p-1 hover:bg-gray-100"
+            >
+              ✕
+            </button>
           </div>
-
-          {/* Right: remarks editor */}
-          <div className="flex flex-col">
-            <div className="mb-2 font-semibold" style={{ color: "var(--secondary)" }}>Remarks</div>
-            {selectedEvent ? (
-              <>
-                <div className="mb-2 text-sm text-gray-600">
-                  {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : `Opp #${selectedEvent.subject}`} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
-                </div>
-                <textarea
-                  className="border rounded-xl p-3 min-h-[200px]"
-                  placeholder="Type notes about the play…"
-                  value={selectedEvent.remarks || ""}
-                  onChange={(e) => updateSelectedRemarks(e.target.value)}
-                />
-                <div className="flex justify-between items-center mt-3">
-                  <div className="text-xs text-gray-500">Saved locally</div>
-                  <Button className="btn-ghost" onClick={() => removeEvent(selectedEvent.id)}>Delete Entry</Button>
-                </div>
-              </>
-            ) : (
-              <div className="text-gray-500">Select an event from the list to add remarks.</div>
-            )}
-          </div>
+          {children}
         </div>
-      </Modal>
-    );
-  };
+      </div>
+    </div>
+  );
+}
+
+
+// --- Timeline modal UI ---
+const TimelineModal = () => {
+  const selectedEvent = events.find(e => e.id === selectedEventId) || null;
+
+  // Keep the textarea focused while typing; only move focus on open/selection change
+  const textareaRef = useRef(null);
+  useEffect(() => {
+    if (!showTimeline) return;
+    if (!selectedEventId) return;
+    const el = textareaRef.current;
+    if (el) {
+      const len = el.value.length;
+      // place caret at the end and focus once when selection changes / modal opens
+      try { el.setSelectionRange(len, len); } catch {}
+      el.focus({ preventScroll: true });
+    }
+  }, [showTimeline, selectedEventId]); // not on every keystroke
+
+  return (
+    <SafeModal
+      open={showTimeline}
+      title="Timeline"
+      onClose={() => setShowTimeline(false)}
+      autoFocusOnOpen={false} // prevent modal from stealing focus each render
+    >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Left: event list */}
+        <div className="max-h-[70vh] overflow-auto border rounded-xl">
+          {events.length === 0 ? (
+            <div className="p-4 text-gray-500">No events yet. Start tapping stats to see them here.</div>
+          ) : (
+            <ul>
+              {events.map(ev => (
+                <li
+                  key={ev.id}
+                  onClick={() => {
+                    setSelectedEventId(ev.id);          // select this event
+                    setRemarksDraft(ev.remarks || "");  // load its remarks into draft
+                  }}
+                  className={[
+                    "px-3 py-2 border-b cursor-pointer flex items-center justify-between",
+                    selectedEventId === ev.id ? "bg-gray-100" : "hover:bg-gray-50"
+                  ].join(" ")}
+                  title="Select to add remarks"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">{fmtTime(ev.ts)}</span>
+                    <span className="font-medium">
+                      {ev.subjectType === "player" ? `Player ${ev.subject}` : `Opp #${ev.subject}`}
+                    </span>
+                    <span className="text-sm text-gray-700">• {ev.category}</span>
+                  </div>
+                  <div className={`font-bold ${ev.delta > 0 ? "text-green-700" : "text-red-700"}`}>
+                    {ev.delta > 0 ? "+1" : "-1"}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Right: remarks editor */}
+        <div className="flex flex-col">
+          <div className="mb-2 font-semibold" style={{ color: "var(--secondary)" }}>Remarks</div>
+          {selectedEvent ? (
+            <>
+              <div className="mb-2 text-sm text-gray-600">
+                {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : `Opp #${selectedEvent.subject}`} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
+              </div>
+
+              <textarea
+                ref={textareaRef}
+                className="border rounded-xl p-3 min-h-[200px]"
+                placeholder="Type notes about the play…"
+                value={remarksDraft}
+                onChange={(e) => setRemarksDraft(e.target.value)}  // update draft only (no events write)
+              />
+
+              <div className="flex justify-between items-center mt-3">
+                <div className="text-xs text-gray-500">Saved locally</div>
+                <div className="flex gap-2">
+                  <Button className="btn-primary" onClick={() => { saveRemarks(); setShowTimeline(false); }}
+      aria-label="Save and close"
+      disabled={!selectedEventId}
+    >
+      Save & Close</Button>
+                 
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="text-gray-500">Select an event from the list to add remarks.</div>
+          )}
+        </div>
+      </div>
+    </SafeModal>
+  );
+};
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
