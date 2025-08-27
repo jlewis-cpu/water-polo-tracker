@@ -139,6 +139,25 @@ export default function App() {
     }, 120);
   };
 
+// --- Reset / New Game helper ---
+const resetToLanding = () => {
+  // clear saved session from localStorage
+  ['wp_players','wp_opponents','wp_categories','wp_events','wp_gameId'].forEach(k => localStorage.removeItem(k));
+  
+  // reset state
+  setPlayers([]);
+  setOpponents([]);
+  setEvents([]);
+  setHistoryByPlayer({});
+  setHistoryByOpp({});
+  setSelected(null);
+  setSelectedOpp(null);
+  setGameId("");
+  setPendingGameId("");
+  setShowStart(true);
+};
+
+
   // --- Timeline helpers ---
   const recordEvent = (subjectType, subject, category, delta) => {
     const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
@@ -658,6 +677,11 @@ const undoOpp = (cap) => {
           <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
           <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
           <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
+<Button onClick={() => {
+  if (window.confirm("Start a new game? Current stats will be cleared.")) resetToLanding();
+}} className="bg-red-700 text-white">
+  New Game
+</Button>
         </div>
       </header>
 
