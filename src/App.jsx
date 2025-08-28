@@ -61,43 +61,54 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState(null);
   const [remarksDraft, setRemarksDraft] = useState("");
 
+  // === Shot Chart Kit — State (namespaced) ===
+  const [SC_shotsField, setSC_ShotsField] = useState([]);   // {id, ts, player, quarter, result:'made'|'miss', x, y}
+  const [SC_shotsGoalie, setSC_ShotsGoalie] = useState([]); // {id, ts, goalie, quarter, result:'save'|'ga', x, y}
+  const [SC_showShotOverlay, setSC_ShowShotOverlay] = useState(false);
+  const [SC_shotConfig, setSC_ShotConfig] = useState(null); // { kind:'field'|'goalie', player|goalie, quarter?, result }
+  const [SC_showFieldChart, setSC_ShowFieldChart] = useState(false);
+  const [SC_showGoalieChart, setSC_ShowGoalieChart] = useState(false);
+
   // --- Load & migrate localStorage (only categories and opponents template initially) ---
-useEffect(() => {
-  // Load categories, filter out core/goalie/quarters
-  const c = localStorage.getItem("wp_categories");
-  if (c) {
-    const parsedC = JSON.parse(c);
-    const filtered = parsedC.filter(
-      x =>
-        !QUARTERS.includes(x) &&
-        !GOALIE_TOP.includes(x) &&
-        !CORE_ROW.includes(x) &&
-        x !== HIDDEN_TILE &&
-        x !== PENALTIES
-    );
-    setCategoriesExtras(filtered);
-    localStorage.setItem("wp_categories", JSON.stringify(filtered));
-  }
+  useEffect(() => {
+    // Load categories, filter out core/goalie/quarters
+    const c = localStorage.getItem("wp_categories");
+    if (c) {
+      const parsedC = JSON.parse(c);
+      const filtered = parsedC.filter(
+        x =>
+          !QUARTERS.includes(x) &&
+          !GOALIE_TOP.includes(x) &&
+          !CORE_ROW.includes(x) &&
+          x !== HIDDEN_TILE &&
+          x !== PENALTIES
+      );
+      setCategoriesExtras(filtered);
+      localStorage.setItem("wp_categories", JSON.stringify(filtered));
+    }
 
-  // Start with empty opponents grid
-  setOpponents(makeEmptyOpponents());
+    // Start with empty opponents grid
+    setOpponents(makeEmptyOpponents());
 
-  // Try to resume in-progress session (optional)
-  const p = localStorage.getItem("wp_players");
-  const o = localStorage.getItem("wp_opponents");
-  const e = localStorage.getItem("wp_events");
-  const g = localStorage.getItem("wp_gameId");
-  if (p && o && e && g) {
-    try {
-      setPlayers(JSON.parse(p));
-      setOpponents(JSON.parse(o));
-      setEvents(JSON.parse(e));
-      setGameId(g);
-      setShowStart(false);
-    } catch {}
-  }
-}, []); // ← only ONE effect here
-
+    // Try to resume in-progress session (optional)
+    const p = localStorage.getItem("wp_players");
+    const o = localStorage.getItem("wp_opponents");
+    const e = localStorage.getItem("wp_events");
+    const g = localStorage.getItem("wp_gameId");
+    const sf = localStorage.getItem("wp_shots_field");
+    const sg = localStorage.getItem("wp_shots_goalie");
+    if (p && o && e && g) {
+      try {
+        setPlayers(JSON.parse(p));
+        setOpponents(JSON.parse(o));
+        setEvents(JSON.parse(e));
+        setGameId(g);
+        setShowStart(false);
+      } catch {}
+    }
+    if (sf) { try { setSC_ShotsField(JSON.parse(sf)); } catch {} }
+    if (sg) { try { setSC_ShotsGoalie(JSON.parse(sg)); } catch {} }
+  }, []); // ← only ONE effect here
 
   // Persist dynamic data on change
   useEffect(() => { localStorage.setItem("wp_players", JSON.stringify(players)); }, [players]);
@@ -105,6 +116,10 @@ useEffect(() => {
   useEffect(() => { localStorage.setItem("wp_opponents", JSON.stringify(opponents)); }, [opponents]);
   useEffect(() => { localStorage.setItem("wp_events", JSON.stringify(events)); }, [events]);
   useEffect(() => { if (gameId) localStorage.setItem("wp_gameId", gameId); }, [gameId]);
+
+  // Shot chart persistence
+  useEffect(() => { localStorage.setItem("wp_shots_field", JSON.stringify(SC_shotsField)); }, [SC_shotsField]);
+  useEffect(() => { localStorage.setItem("wp_shots_goalie", JSON.stringify(SC_shotsGoalie)); }, [SC_shotsGoalie]);
 
   function migratePlayer(pl) {
     const isGoalie = !!pl.isGoalie;
@@ -144,37 +159,34 @@ useEffect(() => {
     }, 120);
   };
 
-// --- Reset / New Game helper ---
-const resetToLanding = () => {
-  // clear saved session from localStorage
-  ['wp_players','wp_opponents','wp_categories','wp_events','wp_gameId'].forEach(k => localStorage.removeItem(k));
-  
-  // reset state
-  setPlayers([]);
-  setOpponents([]);
-  setEvents([]);
-  setHistoryByPlayer({});
-  setHistoryByOpp({});
-  setSelected(null);
-  setRemarksDraft("");
-  setSelectedOpp(null);
-  setGameId("");
-  setPendingGameId("");
-  setShowStart(true);
-};
-
+  // --- Reset / New Game helper ---
+  const resetToLanding = () => {
+    ['wp_players','wp_opponents','wp_categories','wp_events','wp_gameId','wp_shots_field','wp_shots_goalie']
+      .forEach(k => localStorage.removeItem(k));
+    setPlayers([]);
+    setOpponents([]);
+    setEvents([]);
+    setHistoryByPlayer({});
+    setHistoryByOpp({});
+    setSelected(null);
+    setRemarksDraft("");
+    setSelectedOpp(null);
+    setGameId("");
+    setPendingGameId("");
+    setSC_ShotsField([]);
+    setSC_ShotsGoalie([]);
+    setShowStart(true);
+  };
 
   // --- Timeline helpers ---
   const recordEvent = (subjectType, subject, category, delta) => {
-  const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
-  setEvents(prev => [ev, ...prev]); // newest first
-  // If nothing is selected yet, select this new event and reset draft once.
-  if (selectedEventId == null) {
-    setSelectedEventId(ev.id);
-    setRemarksDraft("");
-  }
-};
-
+    const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
+    setEvents(prev => [ev, ...prev]); // newest first
+    if (selectedEventId == null) {
+      setSelectedEventId(ev.id);
+      setRemarksDraft("");
+    }
+  };
 
   const selectedEvent = events.find(e => e.id === selectedEventId) || null;
   const updateSelectedRemarks = (text) => {
@@ -182,38 +194,36 @@ const resetToLanding = () => {
   };
   const removeEvent = (id) => {
     setEvents(list => list.filter(ev => ev.id !== id));
-     if (selectedEventId === id) {
-   setSelectedEventId(null);
-   setRemarksDraft("");
- }
+    if (selectedEventId === id) {
+      setSelectedEventId(null);
+      setRemarksDraft("");
+    }
   };
 
-const saveRemarks = () => {
-  if (!selectedEventId) return;
-  const text = remarksDraft;
-  setEvents(list =>
-    list.map(ev => (ev.id === selectedEventId ? { ...ev, remarks: text } : ev))
-  );
-};
-
-
-// Remove the newest matching +1 event from the timeline
-const removeLatestEvent = (subjectType, subject, category) => {
-  setEvents(prev => {
-    const idx = prev.findIndex(
-      ev =>
-        ev.subjectType === subjectType &&
-        ev.subject === subject &&
-        ev.category === category &&
-        ev.delta === +1
+  const saveRemarks = () => {
+    if (!selectedEventId) return;
+    const text = remarksDraft;
+    setEvents(list =>
+      list.map(ev => (ev.id === selectedEventId ? { ...ev, remarks: text } : ev))
     );
-    if (idx === -1) return prev; // nothing to remove
-    const next = prev.slice();
-    next.splice(idx, 1);
-    return next;
-  });
-};
+  };
 
+  // Remove the newest matching +1 event from the timeline
+  const removeLatestEvent = (subjectType, subject, category) => {
+    setEvents(prev => {
+      const idx = prev.findIndex(
+        ev =>
+          ev.subjectType === subjectType &&
+          ev.subject === subject &&
+          ev.category === category &&
+          ev.delta === +1
+      );
+      if (idx === -1) return prev;
+      const next = prev.slice();
+      next.splice(idx, 1);
+      return next;
+    });
+  };
 
   // --- Player stat ops ---
   const bump = (playerName, cat, delta, modeForFlash) => {
@@ -234,20 +244,40 @@ const removeLatestEvent = (subjectType, subject, category) => {
       [playerName]: [...(h[playerName] || []), { cat }]
     }));
     recordEvent("player", playerName, cat, +1);
+
+    // === Shot Chart triggers ===
+    const isGoalie = players.find(p => p.name === playerName)?.isGoalie;
+    if (!isGoalie) {
+      if (QUARTERS.includes(cat)) {
+        // Goal made by quarter
+        setSC_ShotConfig({ kind: "field", player: playerName, quarter: cat, result: "made" });
+        setSC_ShowShotOverlay(true);
+      } else if (cat === "Attempts") {
+        // Missed shot — choose quarter
+        setSC_ShotConfig({ kind: "field", player: playerName, quarter: null, result: "miss" });
+        setSC_ShowShotOverlay(true);
+      }
+    } else {
+      if (cat === "Saves") {
+        setSC_ShotConfig({ kind: "goalie", goalie: playerName, quarter: "Q1", result: "save" });
+        setSC_ShowShotOverlay(true);
+      } else if (cat === "Goals Against") {
+        setSC_ShotConfig({ kind: "goalie", goalie: playerName, quarter: "Q1", result: "ga" });
+        setSC_ShowShotOverlay(true);
+      }
+    }
   };
 
   const undoForPlayer = (playerName) => {
-  setHistoryByPlayer(h => {
-    const stack = [...(h[playerName] || [])];
-    if (stack.length === 0) return h;
-    const last = stack.pop();
-    bump(playerName, last.cat, -1, "undo");
-    // remove the newest matching +1 from timeline
-    removeLatestEvent("player", playerName, last.cat);
-    return { ...h, [playerName]: stack };
-  });
-};
-
+    setHistoryByPlayer(h => {
+      const stack = [...(h[playerName] || [])];
+      if (stack.length === 0) return h;
+      const last = stack.pop();
+      bump(playerName, last.cat, -1, "undo");
+      removeLatestEvent("player", playerName, last.cat);
+      return { ...h, [playerName]: stack };
+    });
+  };
 
   // --- Opponent stat ops ---
   const bumpOpp = (cap, cat, delta, modeForFlash) => {
@@ -270,18 +300,16 @@ const removeLatestEvent = (subjectType, subject, category) => {
     recordEvent("opponent", String(cap), cat, +1);
   };
 
-const undoOpp = (cap) => {
-  setHistoryByOpp(h => {
-    const stack = [...(h[cap] || [])];
-    if (stack.length === 0) return h;
-    const last = stack.pop();
-    bumpOpp(cap, last.cat, -1, "undo");
-    // remove the newest matching +1 from timeline
-    removeLatestEvent("opponent", String(cap), last.cat);
-    return { ...h, [cap]: stack };
-  });
-};
-
+  const undoOpp = (cap) => {
+    setHistoryByOpp(h => {
+      const stack = [...(h[cap] || [])];
+      if (stack.length === 0) return h;
+      const last = stack.pop();
+      bumpOpp(cap, last.cat, -1, "undo");
+      removeLatestEvent("opponent", String(cap), last.cat);
+      return { ...h, [cap]: stack };
+    });
+  };
 
   // --- Roster loaders (used only when starting a game) ---
   const buildRoster = (which) => {
@@ -308,13 +336,14 @@ const undoOpp = (cap) => {
     setShowStart(false);
     setSelected(null);
     setSelectedOpp(null);
+    setSC_ShotsField([]);
+    setSC_ShotsGoalie([]);
   };
 
   const endGame = () => {
     const ok = window.confirm("End game and download CSV?");
     if (!ok) return;
     exportCSV();
-    // keep state so you can review/export again if needed
   };
 
   // --- Category ops (EXTRAS ONLY) ---
@@ -364,63 +393,60 @@ const undoOpp = (cap) => {
   }, []);
 
   const exportCSV = () => {
-  // --- helpers for CSV escaping ---
-  const csvEscape = (val) => {
-    const s = String(val ?? "");
-    // wrap in quotes if it contains comma, quote, or newline; escape quotes
-    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  const row = (arr) => arr.map(csvEscape).join(",");
+    const csvEscape = (val) => {
+      const s = String(val ?? "");
+      if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const row = (arr) => arr.map(csvEscape).join(",");
 
-  // Players table
-  const rowsPlayers = players.map(p => [
-    p.name,
-    p.cap || "",
-    ...playerHeaders.slice(2).map(h => (p.stats && p.stats[h] != null ? p.stats[h] : ""))
-  ]);
+    // Players table
+    const rowsPlayers = players.map(p => [
+      p.name,
+      p.cap || "",
+      ...playerHeaders.slice(2).map(h => (p.stats && p.stats[h] != null ? p.stats[h] : ""))
+    ]);
 
-  // Opponent table
-  const rowsOpponents = opponents.map(o => {
-    const r = [String(o.cap)];
-    OPP_QUARTERS.forEach(q => {
-      r.push(o.stats[OPP_EJ(q)] ?? 0, o.stats[OPP_PE(q)] ?? 0);
+    // Opponent table
+    const rowsOpponents = opponents.map(o => {
+      const r = [String(o.cap)];
+      OPP_QUARTERS.forEach(q => {
+        r.push(o.stats[OPP_EJ(q)] ?? 0, o.stats[OPP_PE(q)] ?? 0);
+      });
+      return r;
     });
-    return r;
-  });
 
-  // Timeline table (new third section)
-  const timelineHeaders = ["Time", "Type", "Subject", "Category", "Delta", "Remarks"];
-  const rowsTimeline = events.map(ev => [
-    fmtTime(ev.ts),
-    ev.subjectType,                           // "player" | "opponent"
-    ev.subjectType === "player" ? ev.subject : `#${ev.subject}`,
-    ev.category,
-    ev.delta > 0 ? "+1" : "-1",
-    ev.remarks || ""
-  ]);
+    // Timeline table
+    const timelineHeaders = ["Time", "Type", "Subject", "Category", "Delta", "Remarks"];
+    const rowsTimeline = events.map(ev => [
+      fmtTime(ev.ts),
+      ev.subjectType,
+      ev.subjectType === "player" ? ev.subject : `#${ev.subject}`,
+      ev.category,
+      ev.delta > 0 ? "+1" : "-1",
+      ev.remarks || ""
+    ]);
 
-  // Build CSV with blank lines between sections
-  const csvParts = [
-    row(playerHeaders),
-    ...rowsPlayers.map(row),
-    "",
-    row(opponentHeaders),
-    ...rowsOpponents.map(row),
-    "",
-    row(timelineHeaders),
-    ...rowsTimeline.map(row),
-  ];
+    const csvParts = [
+      row(playerHeaders),
+      ...rowsPlayers.map(row),
+      "",
+      row(opponentHeaders),
+      ...rowsOpponents.map(row),
+      "",
+      row(timelineHeaders),
+      ...rowsTimeline.map(row),
+    ];
 
-  const csv = csvParts.join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = (gameId || "game") + ".csv";
-  a.click();
-  URL.revokeObjectURL(url);
-};
+    const csv = csvParts.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (gameId || "game") + ".csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const selectedPlayer = players.find(p => p.name === selected);
   const selectedOppObj = opponents.find(o => o.cap === selectedOpp);
@@ -430,6 +456,14 @@ const undoOpp = (cap) => {
     if (!player) return null;
     const topRow = player.isGoalie ? GOALIE_TOP : QUARTERS;
     const extras = categoriesExtras; // Only user-added
+
+    const updateCap = (name, value) => {
+      setPlayers(ps => ps.map(p => p.name === name ? { ...p, cap: value } : p));
+    };
+
+    const removePlayer = (name) => {
+      setPlayers(ps => ps.filter(p => p.name !== name));
+    };
 
     return (
       <div className="space-y-4">
@@ -602,7 +636,7 @@ const undoOpp = (cap) => {
                   className={[
                     "px-3 py-1 rounded-md text-white",
                     "bg-red-800",
-                    flashClass(`opp-${cap}`, OPP_PE(q)), // Penalties flash RED on inc
+                    flashClass(`opp-${cap}`, OPP_PE(q)),
                   ].join(" ")}
                 >
                   Penalties: {opp.stats[OPP_PE(q)]}
@@ -615,149 +649,380 @@ const undoOpp = (cap) => {
     );
   };
 
-// Ultra-simple, click-safe modal for debugging and production use
-function SafeModal({ open, title, onClose, children }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-[1000]">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/40"
-        onClick={() => {
-          console.log("Backdrop click");
-          onClose?.();
-        }}
-      />
-      {/* Dialog */}
-      <div
-        className="absolute inset-0 flex items-center justify-center"
-        // pointer-events on wrapper are enabled (default); dialog is clickable
-      >
+  // Ultra-simple, click-safe modal for debugging and production use
+  function SafeModal({ open, title, onClose, children }) {
+    if (!open) return null;
+    return (
+      <div className="fixed inset-0 z-[1000]">
+        {/* Backdrop */}
         <div
-          className="relative bg-white rounded-xl shadow-2xl max-w-3xl w-[95%] p-4 outline-none"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-bold">{title}</h2>
-            <button
-              type="button"
-              onClick={() => {
-                console.log("X click");
-                onClose?.();
-              }}
-              aria-label="Close"
-              className="rounded p-1 hover:bg-gray-100"
-            >
-              ✕
-            </button>
+          className="absolute inset-0 bg-black/40"
+          onClick={() => onClose?.()}
+        />
+        {/* Dialog */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div
+            className="relative bg-white rounded-xl shadow-2xl max-w-3xl w-[95%] p-4 outline-none"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-bold">{title}</h2>
+              <button
+                type="button"
+                onClick={() => onClose?.()}
+                aria-label="Close"
+                className="rounded p-1 hover:bg-gray-100"
+              >
+                ✕
+              </button>
+            </div>
+            {children}
           </div>
-          {children}
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
+  // --- Timeline modal UI ---
+  const TimelineModal = () => {
+    const selectedEvent = events.find(e => e.id === selectedEventId) || null;
 
-// --- Timeline modal UI ---
-const TimelineModal = () => {
-  const selectedEvent = events.find(e => e.id === selectedEventId) || null;
+    const textareaRef = useRef(null);
+    useEffect(() => {
+      if (!showTimeline) return;
+      if (!selectedEventId) return;
+      const el = textareaRef.current;
+      if (el) {
+        const len = el.value.length;
+        try { el.setSelectionRange(len, len); } catch {}
+        el.focus({ preventScroll: true });
+      }
+    }, [showTimeline, selectedEventId]);
 
-  // Keep the textarea focused while typing; only move focus on open/selection change
-  const textareaRef = useRef(null);
-  useEffect(() => {
-    if (!showTimeline) return;
-    if (!selectedEventId) return;
-    const el = textareaRef.current;
-    if (el) {
-      const len = el.value.length;
-      // place caret at the end and focus once when selection changes / modal opens
-      try { el.setSelectionRange(len, len); } catch {}
-      el.focus({ preventScroll: true });
-    }
-  }, [showTimeline, selectedEventId]); // not on every keystroke
+    return (
+      <SafeModal
+        open={showTimeline}
+        title="Timeline"
+        onClose={() => setShowTimeline(false)}
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Left: event list */}
+          <div className="max-h-[70vh] overflow-auto border rounded-xl">
+            {events.length === 0 ? (
+              <div className="p-4 text-gray-500">No events yet. Start tapping stats to see them here.</div>
+            ) : (
+              <ul>
+                {events.map(ev => (
+                  <li
+                    key={ev.id}
+                    onClick={() => {
+                      setSelectedEventId(ev.id);
+                      setRemarksDraft(ev.remarks || "");
+                    }}
+                    className={[
+                      "px-3 py-2 border-b cursor-pointer flex items-center justify-between",
+                      selectedEventId === ev.id ? "bg-gray-100" : "hover:bg-gray-50"
+                    ].join(" ")}
+                    title="Select to add remarks"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">{fmtTime(ev.ts)}</span>
+                      <span className="font-medium">
+                        {ev.subjectType === "player" ? `Player ${ev.subject}` : `Opp #${ev.subject}`}
+                      </span>
+                      <span className="text-sm text-gray-700">• {ev.category}</span>
+                    </div>
+                    <div className={`font-bold ${ev.delta > 0 ? "text-green-700" : "text-red-700"}`}>
+                      {ev.delta > 0 ? "+1" : "-1"}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
-  return (
-    <SafeModal
-      open={showTimeline}
-      title="Timeline"
-      onClose={() => setShowTimeline(false)}
-      autoFocusOnOpen={false} // prevent modal from stealing focus each render
-    >
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Left: event list */}
-        <div className="max-h-[70vh] overflow-auto border rounded-xl">
-          {events.length === 0 ? (
-            <div className="p-4 text-gray-500">No events yet. Start tapping stats to see them here.</div>
-          ) : (
-            <ul>
-              {events.map(ev => (
-                <li
-                  key={ev.id}
-                  onClick={() => {
-                    setSelectedEventId(ev.id);          // select this event
-                    setRemarksDraft(ev.remarks || "");  // load its remarks into draft
-                  }}
-                  className={[
-                    "px-3 py-2 border-b cursor-pointer flex items-center justify-between",
-                    selectedEventId === ev.id ? "bg-gray-100" : "hover:bg-gray-50"
-                  ].join(" ")}
-                  title="Select to add remarks"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-500">{fmtTime(ev.ts)}</span>
-                    <span className="font-medium">
-                      {ev.subjectType === "player" ? `Player ${ev.subject}` : `Opp #${ev.subject}`}
-                    </span>
-                    <span className="text-sm text-gray-700">• {ev.category}</span>
-                  </div>
-                  <div className={`font-bold ${ev.delta > 0 ? "text-green-700" : "text-red-700"}`}>
-                    {ev.delta > 0 ? "+1" : "-1"}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Right: remarks editor */}
-        <div className="flex flex-col">
-          <div className="mb-2 font-semibold" style={{ color: "var(--secondary)" }}>Remarks</div>
-          {selectedEvent ? (
-            <>
-              <div className="mb-2 text-sm text-gray-600">
-                {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : `Opp #${selectedEvent.subject}`} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
-              </div>
-
-              <textarea
-                ref={textareaRef}
-                className="border rounded-xl p-3 min-h-[200px]"
-                placeholder="Type notes about the play…"
-                value={remarksDraft}
-                onChange={(e) => setRemarksDraft(e.target.value)}  // update draft only (no events write)
-              />
-
-              <div className="flex justify-between items-center mt-3">
-                <div className="text-xs text-gray-500">Saved locally</div>
-                <div className="flex gap-2">
-                  <Button className="btn-primary" onClick={() => { saveRemarks(); setShowTimeline(false); }}
-      aria-label="Save and close"
-      disabled={!selectedEventId}
-    >
-      Save & Close</Button>
-                 
+          {/* Right: remarks editor */}
+          <div className="flex flex-col">
+            <div className="mb-2 font-semibold" style={{ color: "var(--secondary)" }}>Remarks</div>
+            {selectedEvent ? (
+              <>
+                <div className="mb-2 text-sm text-gray-600">
+                  {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : `Opp #${selectedEvent.subject}`} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
                 </div>
-              </div>
-            </>
-          ) : (
-            <div className="text-gray-500">Select an event from the list to add remarks.</div>
-          )}
+
+                <textarea
+                  ref={textareaRef}
+                  className="border rounded-xl p-3 min-h-[200px]"
+                  placeholder="Type notes about the play…"
+                  value={remarksDraft}
+                  onChange={(e) => setRemarksDraft(e.target.value)}
+                />
+
+                <div className="flex justify-end items-center mt-3 gap-2">
+                  <Button className="btn-primary" onClick={() => { saveRemarks(); setShowTimeline(false); }}
+                    aria-label="Save and close" disabled={!selectedEventId}>
+                    Save & Close
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="text-gray-500">Select an event from the list to add remarks.</div>
+            )}
+          </div>
         </div>
-      </div>
-    </SafeModal>
-  );
-};
+      </SafeModal>
+    );
+  };
+
+  /* =========================
+     Shot Chart — Overlay to place a dot
+     ========================= */
+  const SC_PoolShotOverlay = () => {
+    const boxRef = useRef(null);
+    const [pickerQuarter, setPickerQuarter] = useState("Q1");
+
+    const needsQuarterPicker =
+      !!SC_shotConfig &&
+      (
+        SC_shotConfig.kind === "goalie" ||
+        (SC_shotConfig.kind === "field" && SC_shotConfig.result === "miss" && !SC_shotConfig.quarter)
+      );
+
+    useEffect(() => {
+      if (!SC_showShotOverlay || !SC_shotConfig) return;
+      setPickerQuarter(
+        SC_shotConfig.quarter && QUARTERS.includes(SC_shotConfig.quarter) ? SC_shotConfig.quarter : "Q1"
+      );
+    }, [SC_showShotOverlay, SC_shotConfig]);
+
+    if (!SC_showShotOverlay || !SC_shotConfig) return null;
+
+    const close = () => { setSC_ShowShotOverlay(false); setSC_ShotConfig(null); };
+
+    const handleClick = (e) => {
+      const rect = boxRef.current.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      const stamp = { id: eid(), ts: Date.now(), x, y };
+
+      if (SC_shotConfig.kind === "field") {
+        const quarter = SC_shotConfig.quarter || pickerQuarter || "Q?";
+        setSC_ShotsField(prev => [{ ...stamp, player: SC_shotConfig.player, quarter, result: SC_shotConfig.result }, ...prev]);
+        recordEvent("player", SC_shotConfig.player, `Shot ${SC_shotConfig.result === "made" ? "Made" : "Miss"} (${quarter})`, +1);
+      } else {
+        const quarter = pickerQuarter || SC_shotConfig.quarter || "Q?";
+        setSC_ShotsGoalie(prev => [{ ...stamp, goalie: SC_shotConfig.goalie, quarter, result: SC_shotConfig.result }, ...prev]);
+        recordEvent("player", SC_shotConfig.goalie, `Goalie ${SC_shotConfig.result === "save" ? "Save" : "Goal Against"} (${quarter})`, +1);
+      }
+      close();
+    };
+
+    const poolStyle = {
+      position: "relative",
+      width: "100%",
+      maxWidth: "1100px",
+      height: "56vh",
+      margin: "0 auto",
+      background: "url('/pool.png') center/cover no-repeat", // static image
+      borderRadius: 12,
+      boxShadow: "inset 0 0 40px rgba(0,0,0,0.15)",
+      cursor: "crosshair",
+    };
+
+    return (
+      <SafeModal open={SC_showShotOverlay} title={SC_shotConfig.kind === "field" ? "Field Shot Location" : "Goalie Shot Location"} onClose={close}>
+        <div className="space-y-3">
+          <div className="text-sm text-gray-700">
+            {SC_shotConfig.kind === "field" ? (
+              <>Tap where <b>{SC_shotConfig.player}</b> shot.</>
+            ) : (
+              <>Tap opponent shot location on <b>{SC_shotConfig.goalie}</b>.</>
+            )}
+          </div>
+
+          {needsQuarterPicker && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="text-sm font-medium" style={{ color: "var(--secondary)" }}>Quarter:</div>
+              <div className="flex gap-2">
+                {QUARTERS.map(q => (
+                  <button key={q}
+                    className={`px-3 py-1 rounded-lg border ${pickerQuarter === q ? "bg-gray-900 text-white" : "bg-white"}`}
+                    onClick={() => setPickerQuarter(q)}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div ref={boxRef} onClick={handleClick} style={poolStyle} title="Tap to place">
+            {/* guide lines */}
+            <div style={{position:'absolute', top:'50%', left:0, right:0, height:2, background:'rgba(255,255,255,0.6)'}}/>
+            <div style={{position:'absolute', top:'25%', left:0, right:0, height:2, background:'rgba(255,0,0,0.35)'}}/>
+            <div style={{position:'absolute', top:'75%', left:0, right:0, height:2, background:'rgba(255,0,0,0.35)'}}/>
+          </div>
+
+          <div className="text-xs text-gray-500">Tip: Wrong spot? Delete the dot later in the chart view.</div>
+        </div>
+      </SafeModal>
+    );
+  };
+
+  /* =========================
+     Shot Chart — Field Chart Viewer
+     ========================= */
+  const SC_FieldShotChartModal = () => {
+    const [sel, setSel] = useState(null);
+    const remove = (id) => setSC_ShotsField(list => list.filter(s => s.id !== id));
+
+    const poolStyle = {
+      position: "relative",
+      width: "100%",
+      maxWidth: "1100px",
+      height: "56vh",
+      margin: "0 auto",
+      background: "url('/pool.png') center/cover no-repeat",
+      borderRadius: 12,
+      boxShadow: "inset 0 0 40px rgba(0,0,0,0.15)",
+    };
+
+    return (
+      <SafeModal open={SC_showFieldChart} title="Field Shot Chart" onClose={() => setSC_ShowFieldChart(false)}>
+        <div className="space-y-3">
+          <div style={poolStyle}>
+            <div style={{position:'absolute', top:'50%', left:0, right:0, height:2, background:'rgba(255,255,255,0.6)'}}/>
+            <div style={{position:'absolute', top:'25%', left:0, right:0, height:2, background:'rgba(255,0,0,0.35)'}}/>
+            <div style={{position:'absolute', top:'75%', left:0, right:0, height:2, background:'rgba(255,0,0,0.35)'}}/>
+            {SC_shotsField.map(s => {
+              const left = `${s.x * 100}%`, top = `${s.y * 100}%`;
+              const bg = s.result === "made" ? "#16a34a" : "#dc2626";
+              const selected = sel === s.id;
+              return (
+                <div key={s.id}
+                  onClick={() => setSel(s.id)}
+                  title={`${s.player} • ${s.quarter} • ${s.result.toUpperCase()}`}
+                  style={{
+                    position:'absolute', left, top,
+                    width: selected ? 18 : 14, height: selected ? 18 : 14,
+                    borderRadius:'50%', background:bg, border:'2px solid white',
+                    transform:'translate(-50%, -50%)',
+                    boxShadow: selected ? '0 0 0 4px rgba(0,0,0,0.2)' : 'none',
+                    cursor:'pointer'
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          <div className="max-h-[24vh] overflow-auto border rounded-lg p-2">
+            {SC_shotsField.length === 0 ? (
+              <div className="text-gray-500 text-sm">No shots yet.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-gray-600">
+                    <th className="py-1">Time</th><th>Player</th><th>Quarter</th><th>Result</th><th>X</th><th>Y</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SC_shotsField.map(s => (
+                    <tr key={s.id} className={sel===s.id ? "bg-gray-100" : ""}>
+                      <td className="py-1">{fmtTime(s.ts)}</td>
+                      <td>{s.player}</td>
+                      <td>{s.quarter}</td>
+                      <td>{s.result.toUpperCase()}</td>
+                      <td>{s.x.toFixed(2)}</td>
+                      <td>{s.y.toFixed(2)}</td>
+                      <td><button className="text-red-700 hover:underline" onClick={() => remove(s.id)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </SafeModal>
+    );
+  };
+
+  /* =========================
+     Shot Chart — Goalie Chart Viewer
+     ========================= */
+  const SC_GoalieShotChartModal = () => {
+    const [sel, setSel] = useState(null);
+    const remove = (id) => setSC_ShotsGoalie(list => list.filter(s => s.id !== id));
+
+    const poolStyle = {
+      position: "relative",
+      width: "100%",
+      maxWidth: "1100px",
+      height: "56vh",
+      margin: "0 auto",
+      background: "url('/pool.png') center/cover no-repeat",
+      borderRadius: 12,
+      boxShadow: "inset 0 0 40px rgba(0,0,0,0.15)",
+    };
+
+    return (
+      <SafeModal open={SC_showGoalieChart} title="Goalie Shot Chart" onClose={() => setSC_ShowGoalieChart(false)}>
+        <div className="space-y-3">
+          <div style={poolStyle}>
+            <div style={{position:'absolute', top:'50%', left:0, right:0, height:2, background:'rgba(255,255,255,0.6)'}}/>
+            <div style={{position:'absolute', top:'25%', left:0, right:0, height:2, background:'rgba(255,0,0,0.35)'}}/>
+            <div style={{position:'absolute', top:'75%', left:0, right:0, height:2, background:'rgba(255,0,0,0.35)'}}/>
+            {SC_shotsGoalie.map(s => {
+              const left = `${s.x * 100}%`, top = `${s.y * 100}%`;
+              const bg = s.result === "save" ? "#2563eb" : "#ea580c";
+              const selected = sel === s.id;
+              return (
+                <div key={s.id}
+                  onClick={() => setSel(s.id)}
+                  title={`${s.goalie} • ${s.quarter} • ${s.result === "save" ? "SAVE" : "GOAL AGAINST"}`}
+                  style={{
+                    position:'absolute', left, top,
+                    width: selected ? 18 : 14, height: selected ? 18 : 14,
+                    borderRadius:'50%', background:bg, border:'2px solid white',
+                    transform:'translate(-50%, -50%)',
+                    boxShadow: selected ? '0 0 0 4px rgba(0,0,0,0.2)' : 'none',
+                    cursor:'pointer'
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          <div className="max-h-[24vh] overflow-auto border rounded-lg p-2">
+            {SC_shotsGoalie.length === 0 ? (
+              <div className="text-gray-500 text-sm">No goalie shots yet.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-gray-600">
+                    <th className="py-1">Time</th><th>Goalie</th><th>Quarter</th><th>Result</th><th>X</th><th>Y</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SC_shotsGoalie.map(s => (
+                    <tr key={s.id} className={sel===s.id ? "bg-gray-100" : ""}>
+                      <td className="py-1">{fmtTime(s.ts)}</td>
+                      <td>{s.goalie}</td>
+                      <td>{s.quarter}</td>
+                      <td>{s.result === "save" ? "SAVE" : "GOAL AGAINST"}</td>
+                      <td>{s.x.toFixed(2)}</td>
+                      <td>{s.y.toFixed(2)}</td>
+                      <td><button className="text-red-700 hover:underline" onClick={() => remove(s.id)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </SafeModal>
+    );
+  };
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -777,11 +1042,11 @@ const TimelineModal = () => {
           <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
           <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
           <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
-<Button onClick={() => {
-  if (window.confirm("Start a new game? Current stats will be cleared.")) resetToLanding();
-}} className="bg-red-700 text-white">
-  New Game
-</Button>
+          <Button onClick={() => {
+            if (window.confirm("Start a new game? Current stats will be cleared.")) resetToLanding();
+          }} className="bg-red-700 text-white">
+            New Game
+          </Button>
         </div>
       </header>
 
@@ -830,17 +1095,30 @@ const TimelineModal = () => {
         </CardContent>
       </Card>
 
-{/* Timeline launcher (centered, primary color) */}
-<div className="mt-4 flex justify-center">
-  <Button
-    onClick={() => setShowTimeline(true)}
-    className="text-white px-4 py-2 rounded-lg"
-    style={{ background: "var(--primary)" }}
-  >
-    Timeline
-  </Button>
-</div>
-
+      {/* Bottom action row: Timeline + Shot Charts */}
+      <div className="mt-4 flex justify-center gap-2">
+        <Button
+          onClick={() => setShowTimeline(true)}
+          className="text-white px-4 py-2 rounded-lg"
+          style={{ background: "var(--primary)" }}
+        >
+          Timeline
+        </Button>
+        <Button
+          onClick={() => setSC_ShowFieldChart(true)}
+          className="text-white px-4 py-2 rounded-lg"
+          style={{ background: "var(--primary)" }}
+        >
+          Field Shot Chart
+        </Button>
+        <Button
+          onClick={() => setSC_ShowGoalieChart(true)}
+          className="text-white px-4 py-2 rounded-lg"
+          style={{ background: "var(--secondary)" }}
+        >
+          Goalie Shot Chart
+        </Button>
+      </div>
 
       {/* Landing / Start Game Overlay */}
       <Modal open={showStart} title="Start Game" onClose={() => { /* keep explicit flow */ }}>
@@ -987,6 +1265,11 @@ const TimelineModal = () => {
 
       {/* Timeline Modal */}
       <TimelineModal />
+
+      {/* Shot Chart overlays */}
+      <SC_PoolShotOverlay />
+      <SC_FieldShotChartModal />
+      <SC_GoalieShotChartModal />
     </div>
   );
 }
