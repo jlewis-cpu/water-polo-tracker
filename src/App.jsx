@@ -21,10 +21,9 @@ function baseCatsFor(isGoalie) {
     : [...QUARTERS, ...CORE_ROW, HIDDEN_TILE, PENALTIES];
 }
 
-// Simple id maker for events
+// ids / time
 const eid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-const fmtTime = (d) =>
-  new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const fmtTime = (d) => new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 export default function App() {
   // ONLY user-added categories (extras)
@@ -65,9 +64,23 @@ export default function App() {
   const [SC_shotsField, setSC_ShotsField] = useState([]);   // {id, ts, player, quarter, result:'made'|'miss', x, y}
   const [SC_shotsGoalie, setSC_ShotsGoalie] = useState([]); // {id, ts, goalie, quarter, result:'save'|'ga', x, y}
   const [SC_showShotOverlay, setSC_ShowShotOverlay] = useState(false);
-  const [SC_shotConfig, setSC_ShotConfig] = useState(null); // { kind:'field'|'goalie', player|goalie, quarter?, result }
+  const [SC_shotConfig, setSC_ShotConfig] = useState(null); // { kind:'field'|'goalie', player|goalie, quarter?, result, __eventId }
   const [SC_showFieldChart, setSC_ShowFieldChart] = useState(false);
   const [SC_showGoalieChart, setSC_ShowGoalieChart] = useState(false);
+
+  // --- Timestamp modal state ---
+  const [TS_show, setTS_Show] = useState(false);
+  const [TS_eventId, setTS_EventId] = useState(null);  // event to annotate
+  const [TS_mode, setTS_Mode] = useState(null);        // 'goal'|'miss'|'save'|'ga'|'penalty'|'ejection'|'opp_penalty'|'opp_ejection'|'timeout'
+  const [TS_time, setTS_Time] = useState("");          // M:SS
+  const [TS_cap, setTS_Cap] = useState("");            // only for 'ga'
+  const TS_open = ({ eventId, mode }) => {
+    setTS_EventId(eventId);
+    setTS_Mode(mode);
+    setTS_Time("");
+    setTS_Cap("");
+    setTS_Show(true);
+  };
 
   // --- Load & migrate localStorage (only categories and opponents template initially) ---
   useEffect(() => {
@@ -116,8 +129,6 @@ export default function App() {
   useEffect(() => { localStorage.setItem("wp_opponents", JSON.stringify(opponents)); }, [opponents]);
   useEffect(() => { localStorage.setItem("wp_events", JSON.stringify(events)); }, [events]);
   useEffect(() => { if (gameId) localStorage.setItem("wp_gameId", gameId); }, [gameId]);
-
-  // Shot chart persistence
   useEffect(() => { localStorage.setItem("wp_shots_field", JSON.stringify(SC_shotsField)); }, [SC_shotsField]);
   useEffect(() => { localStorage.setItem("wp_shots_goalie", JSON.stringify(SC_shotsGoalie)); }, [SC_shotsGoalie]);
 
@@ -180,12 +191,14 @@ export default function App() {
 
   // --- Timeline helpers ---
   const recordEvent = (subjectType, subject, category, delta) => {
-    const ev = { id: eid(), ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
+    const id = eid();
+    const ev = { id, ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
     setEvents(prev => [ev, ...prev]); // newest first
     if (selectedEventId == null) {
-      setSelectedEventId(ev.id);
+      setSelectedEventId(id);
       setRemarksDraft("");
     }
+    return id; // important for timestamp follow-up
   };
 
   const selectedEvent = events.find(e => e.id === selectedEventId) || null;
@@ -243,28 +256,43 @@ export default function App() {
       ...h,
       [playerName]: [...(h[playerName] || []), { cat }]
     }));
-    recordEvent("player", playerName, cat, +1);
+
+    const isGoalie = players.find(p => p.name === playerName)?.isGoalie;
+
+    // create timeline event and keep the id
+    const eventId = recordEvent("player", playerName, cat, +1);
 
     // === Shot Chart triggers ===
-    const isGoalie = players.find(p => p.name === playerName)?.isGoalie;
     if (!isGoalie) {
       if (QUARTERS.includes(cat)) {
         // Goal made by quarter
-        setSC_ShotConfig({ kind: "field", player: playerName, quarter: cat, result: "made" });
+        setSC_ShotConfig({ kind: "field", player: playerName, quarter: cat, result: "made", __eventId: eventId });
         setSC_ShowShotOverlay(true);
+        return;
       } else if (cat === "Attempts") {
         // Missed shot — choose quarter
-        setSC_ShotConfig({ kind: "field", player: playerName, quarter: null, result: "miss" });
+        setSC_ShotConfig({ kind: "field", player: playerName, quarter: null, result: "miss", __eventId: eventId });
         setSC_ShowShotOverlay(true);
+        return;
       }
     } else {
       if (cat === "Saves") {
-        setSC_ShotConfig({ kind: "goalie", goalie: playerName, quarter: "Q1", result: "save" });
+        setSC_ShotConfig({ kind: "goalie", goalie: playerName, quarter: "Q1", result: "save", __eventId: eventId });
         setSC_ShowShotOverlay(true);
+        return;
       } else if (cat === "Goals Against") {
-        setSC_ShotConfig({ kind: "goalie", goalie: playerName, quarter: "Q1", result: "ga" });
+        setSC_ShotConfig({ kind: "goalie", goalie: playerName, quarter: "Q1", result: "ga", __eventId: eventId });
         setSC_ShowShotOverlay(true);
+        return;
       }
+    }
+
+    // === No shot overlay? open timestamp for these categories ===
+    if (cat === PENALTIES) {
+      TS_open({ eventId, mode: "penalty" });
+    }
+    if (cat === HIDDEN_TILE) {
+      TS_open({ eventId, mode: "ejection" });
     }
   };
 
@@ -297,18 +325,15 @@ export default function App() {
       ...h,
       [cap]: [...(h[cap] || []), { cat }]
     }));
-    recordEvent("opponent", String(cap), cat, +1);
-  };
+    const eventId = recordEvent("opponent", String(cap), cat, +1);
 
-  const undoOpp = (cap) => {
-    setHistoryByOpp(h => {
-      const stack = [...(h[cap] || [])];
-      if (stack.length === 0) return h;
-      const last = stack.pop();
-      bumpOpp(cap, last.cat, -1, "undo");
-      removeLatestEvent("opponent", String(cap), last.cat);
-      return { ...h, [cap]: stack };
-    });
+    // Open timestamp for opponent penalties/ejections
+    if (String(cat).endsWith("_Penalties")) {
+      TS_open({ eventId, mode: "opp_penalty" });
+    }
+    if (String(cat).endsWith("_Ejections")) {
+      TS_open({ eventId, mode: "opp_ejection" });
+    }
   };
 
   // --- Roster loaders (used only when starting a game) ---
@@ -455,7 +480,6 @@ export default function App() {
   const PlayerStatsPanel = ({ player }) => {
     if (!player) return null;
     const topRow = player.isGoalie ? GOALIE_TOP : QUARTERS;
-    const extras = categoriesExtras; // Only user-added
 
     const updateCap = (name, value) => {
       setPlayers(ps => ps.map(p => p.name === name ? { ...p, cap: value } : p));
@@ -649,17 +673,12 @@ export default function App() {
     );
   };
 
-  // Ultra-simple, click-safe modal for debugging and production use
+  // Ultra-simple, click-safe modal
   function SafeModal({ open, title, onClose, children }) {
     if (!open) return null;
     return (
       <div className="fixed inset-0 z-[1000]">
-        {/* Backdrop */}
-        <div
-          className="absolute inset-0 bg-black/40"
-          onClick={() => onClose?.()}
-        />
-        {/* Dialog */}
+        <div className="absolute inset-0 bg-black/40" onClick={() => onClose?.()} />
         <div className="absolute inset-0 flex items-center justify-center">
           <div
             className="relative bg-white rounded-xl shadow-2xl max-w-3xl w-[95%] p-4 outline-none"
@@ -668,14 +687,7 @@ export default function App() {
           >
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-bold">{title}</h2>
-              <button
-                type="button"
-                onClick={() => onClose?.()}
-                aria-label="Close"
-                className="rounded p-1 hover:bg-gray-100"
-              >
-                ✕
-              </button>
+              <button type="button" onClick={() => onClose?.()} aria-label="Close" className="rounded p-1 hover:bg-gray-100">✕</button>
             </div>
             {children}
           </div>
@@ -701,11 +713,7 @@ export default function App() {
     }, [showTimeline, selectedEventId]);
 
     return (
-      <SafeModal
-        open={showTimeline}
-        title="Timeline"
-        onClose={() => setShowTimeline(false)}
-      >
+      <SafeModal open={showTimeline} title="Timeline" onClose={() => setShowTimeline(false)}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Left: event list */}
           <div className="max-h-[70vh] overflow-auto border rounded-xl">
@@ -716,10 +724,7 @@ export default function App() {
                 {events.map(ev => (
                   <li
                     key={ev.id}
-                    onClick={() => {
-                      setSelectedEventId(ev.id);
-                      setRemarksDraft(ev.remarks || "");
-                    }}
+                    onClick={() => { setSelectedEventId(ev.id); setRemarksDraft(ev.remarks || ""); }}
                     className={[
                       "px-3 py-2 border-b cursor-pointer flex items-center justify-between",
                       selectedEventId === ev.id ? "bg-gray-100" : "hover:bg-gray-50"
@@ -729,7 +734,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-500">{fmtTime(ev.ts)}</span>
                       <span className="font-medium">
-                        {ev.subjectType === "player" ? `Player ${ev.subject}` : `Opp #${ev.subject}`}
+                        {ev.subjectType === "player" ? `Player ${ev.subject}` : ev.subjectType === "opponent" ? `Opp #${ev.subject}` : ev.subject}
                       </span>
                       <span className="text-sm text-gray-700">• {ev.category}</span>
                     </div>
@@ -748,7 +753,7 @@ export default function App() {
             {selectedEvent ? (
               <>
                 <div className="mb-2 text-sm text-gray-600">
-                  {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : `Opp #${selectedEvent.subject}`} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
+                  {fmtTime(selectedEvent.ts)} — {selectedEvent.subjectType === "player" ? `Player ${selectedEvent.subject}` : selectedEvent.subjectType === "opponent" ? `Opp #${selectedEvent.subject}` : selectedEvent.subject} • {selectedEvent.category} {selectedEvent.delta > 0 ? "+1" : "-1"}
                 </div>
 
                 <textarea
@@ -760,8 +765,7 @@ export default function App() {
                 />
 
                 <div className="flex justify-end items-center mt-3 gap-2">
-                  <Button className="btn-primary" onClick={() => { saveRemarks(); setShowTimeline(false); }}
-                    aria-label="Save and close" disabled={!selectedEventId}>
+                  <Button className="btn-primary" onClick={() => { saveRemarks(); setShowTimeline(false); }} aria-label="Save and close" disabled={!selectedEventId}>
                     Save & Close
                   </Button>
                 </div>
@@ -806,15 +810,27 @@ export default function App() {
       const y = (e.clientY - rect.top) / rect.height;
       const stamp = { id: eid(), ts: Date.now(), x, y };
 
+      const evId = SC_shotConfig.__eventId || null;
+
       if (SC_shotConfig.kind === "field") {
         const quarter = SC_shotConfig.quarter || pickerQuarter || "Q?";
         setSC_ShotsField(prev => [{ ...stamp, player: SC_shotConfig.player, quarter, result: SC_shotConfig.result }, ...prev]);
-        recordEvent("player", SC_shotConfig.player, `Shot ${SC_shotConfig.result === "made" ? "Made" : "Miss"} (${quarter})`, +1);
+
+        // Timestamp modal (no cap prompt)
+        if (evId && SC_shotConfig.result === "made") {
+            TS_open({ eventId: evId, mode: "goal" });
+        }
+
       } else {
         const quarter = pickerQuarter || SC_shotConfig.quarter || "Q?";
         setSC_ShotsGoalie(prev => [{ ...stamp, goalie: SC_shotConfig.goalie, quarter, result: SC_shotConfig.result }, ...prev]);
-        recordEvent("player", SC_shotConfig.goalie, `Goalie ${SC_shotConfig.result === "save" ? "Save" : "Goal Against"} (${quarter})`, +1);
+
+        // Saves: time only; Goals Against: time + Opp Cap
+        if (evId && SC_shotConfig.result === "ga") {
+          TS_open({ eventId: evId, mode: "ga" });
+        }
       }
+
       close();
     };
 
@@ -831,7 +847,7 @@ export default function App() {
     };
 
     return (
-      <SafeModal open={SC_showShotOverlay} title={SC_shotConfig.kind === "field" ? "Field Shot Location" : "Goalie Shot Location"} onClose={close}>
+      <SafeModal open={SC_showShotOverlay} title={SC_shotConfig.kind === "field" ? "Field Shot Location" : "Goalie Shot Location"} onClose={() => { setSC_ShowShotOverlay(false); setSC_ShotConfig(null); }}>
         <div className="space-y-3">
           <div className="text-sm text-gray-700">
             {SC_shotConfig.kind === "field" ? (
@@ -1024,6 +1040,171 @@ export default function App() {
     );
   };
 
+/* =========================
+   Timestamp Modal — GA flow: Cap(2) → Minute(1) → Seconds(2)
+   ========================= */
+const TimestampModal = () => {
+  if (!TS_show) return null;
+
+  const needsCap = TS_mode === "ga";
+
+  // local state for time fields (to avoid focus loss)
+  const [mm, setMM] = useState("");
+  const [ss, setSS] = useState("");
+
+  // refs for controlled focus hopping
+  const capRef = useRef(null);
+  const mmRef  = useRef(null);
+  const ssRef  = useRef(null);
+
+  // only focus once on open, depending on GA or not
+  const didFocusOnOpen = useRef(false);
+  useEffect(() => {
+    if (!TS_show) return;
+    // reset local time fields when opening
+    setMM("");
+    setSS("");
+    didFocusOnOpen.current = false;
+
+    requestAnimationFrame(() => {
+      if (needsCap) {
+        capRef.current?.focus({ preventScroll: true });
+      } else {
+        mmRef.current?.focus({ preventScroll: true });
+      }
+      didFocusOnOpen.current = true;
+    });
+  }, [TS_show, needsCap]);
+
+  const close = () => {
+    setTS_Show(false);
+    setTS_EventId(null);
+    setTS_Mode(null);
+    setTS_Time("");
+    setTS_Cap("");
+  };
+
+  // helpers
+  const clampInt = (v, min, max) => {
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return null;
+    return Math.max(min, Math.min(max, n));
+  };
+
+  const onCapChange = (val) => {
+    // numeric only, 2 digits
+    const clean = val.replace(/\D+/g, "").slice(0, 2);
+    setTS_Cap(clean);
+    // when 2 digits entered, hop to minutes
+    if (clean.length === 2) {
+      requestAnimationFrame(() => mmRef.current?.focus());
+    }
+  };
+
+  const onMMChange = (val) => {
+    const clean = val.replace(/\D+/g, "").slice(0, 1); // single digit 0–9
+    setMM(clean);
+    if (clean.length === 1) {
+      requestAnimationFrame(() => ssRef.current?.focus());
+    }
+  };
+
+  const onSSChange = (val) => {
+    const clean = val.replace(/\D+/g, "").slice(0, 2); // 00–59
+    setSS(clean);
+  };
+
+  const normalizedTime = () => {
+    const m = clampInt(mm, 0, 9);
+    const s = clampInt(ss, 0, 59);
+    if (m === null || s === null) return null;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
+
+const onSave = () => {
+  if (!TS_eventId) return close();
+
+  const t = normalizedTime();
+  if (!t) {
+    alert("Please enter a valid time: minute 0–9 and seconds 00–59.");
+    return;
+  }
+
+  const timeTag = `t=${t}`;
+  const capTag = needsCap && TS_cap.trim() ? ` | opp cap #${TS_cap.trim()}` : "";
+
+  setEvents(list =>
+    list.map(ev =>
+      ev.id === TS_eventId
+        ? { ...ev, remarks: (ev.remarks ? `${ev.remarks} ` : "") + timeTag + capTag }
+        : ev
+    )
+  );
+
+  // >>> NEW: jump all the way back to the main screen
+  setSelected(null);        // close Player Stats modal if open
+  setSelectedOpp(null);     // close Opponent Stats modal if open
+
+  close(); // closes the timestamp modal
+};
+
+
+  return (
+    <SafeModal open={TS_show} title="Add In-Game Timestamp" onClose={close}>
+      <div className="space-y-4">
+        {needsCap && (
+          <div>
+            <label className="block text-sm font-medium mb-1">Opponent Cap # (2 digits)</label>
+            <input
+              ref={capRef}
+              value={TS_cap}
+              onChange={(e) => onCapChange(e.target.value)}
+              className="border rounded-lg px-3 py-2 w-32 text-center"
+              placeholder="##"
+              inputMode="numeric"
+            />
+          </div>
+        )}
+
+        <div className="text-sm text-gray-700">
+          Enter the in-game clock. One digit for minutes, two for seconds — no colon needed.
+        </div>
+
+        <div className="flex items-end gap-3">
+          <div>
+            <label className="block text-sm font-medium mb-1">Minute (0–9)</label>
+            <input
+              ref={mmRef}
+              value={mm}
+              onChange={(e) => onMMChange(e.target.value)}
+              className="border rounded-lg px-3 py-2 w-20 text-center"
+              inputMode="numeric"
+              placeholder="M"
+            />
+          </div>
+          <div className="pb-6 font-bold text-lg">:</div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Seconds (00–59)</label>
+            <input
+              ref={ssRef}
+              value={ss}
+              onChange={(e) => onSSChange(e.target.value)}
+              className="border rounded-lg px-3 py-2 w-24 text-center"
+              inputMode="numeric"
+              placeholder="SS"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button className="btn-ghost" onClick={close}>Cancel</Button>
+          <Button className="btn-primary" onClick={onSave}>Save & Close</Button>
+        </div>
+      </div>
+    </SafeModal>
+  );
+};
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       {/* Header row: left logo/title, right buttons */}
@@ -1038,7 +1219,8 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
+
           <Button className="btn-primary" onClick={() => setShowPlayerModal(true)}>Add Player</Button>
           <Button className="btn-primary" onClick={() => openAddCategory()}>Add Category</Button>
           <Button onClick={endGame} className="bg-gray-800 text-white">End Game</Button>
@@ -1074,6 +1256,29 @@ export default function App() {
           )}
         </CardContent>
       </Card>
+
+{/* Timeouts row (centered, green) */}
+<div className="my-4 flex justify-center gap-3">
+  <Button
+    className="bg-green-600 text-white px-4 py-2 rounded-lg"
+    onClick={() => {
+      const id = recordEvent("team", "Cougar", "Timeout", +1);
+      TS_open({ eventId: id, mode: "timeout" });
+    }}
+  >
+    Cougar Timeout
+  </Button>
+  <Button
+    className="bg-green-600 text-white px-4 py-2 rounded-lg"
+    onClick={() => {
+      const id = recordEvent("team", "Away", "Timeout", +1);
+      TS_open({ eventId: id, mode: "timeout" });
+    }}
+  >
+    Away Timeout
+  </Button>
+</div>
+
 
       {/* Opposition Caps Grid */}
       <Card className="shadow w-full">
@@ -1265,6 +1470,9 @@ export default function App() {
 
       {/* Timeline Modal */}
       <TimelineModal />
+
+      {/* Timestamp Modal */}
+      <TimestampModal />
 
       {/* Shot Chart overlays */}
       <SC_PoolShotOverlay />
