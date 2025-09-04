@@ -4,7 +4,7 @@ import { Card, CardContent } from "./components/Card";
 import Modal from "./components/Modal";
 import { VARSITY, JV } from "./rosters";
 
-const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
+const QUARTERS = ["Q1", "Q2", "Q3", "Q4", "OT"];
 const CORE_ROW = ["Attempts", "Assists", "Drawn Exclusions", "Steals", "Turnovers", "Shot Block", "Sprint Won"];
 const GOALIE_TOP = ["Saves", "Goals Against", "Bad Passes", "Goals"];
 const HIDDEN_TILE = "Ejections";
@@ -72,8 +72,9 @@ export default function App() {
   const [TS_show, setTS_Show] = useState(false);
   const [TS_eventId, setTS_EventId] = useState(null);  // event to annotate
   const [TS_mode, setTS_Mode] = useState(null);        // 'goal'|'miss'|'save'|'ga'|'penalty'|'ejection'|'opp_penalty'|'opp_ejection'|'timeout'
-  const [TS_time, setTS_Time] = useState("");          // M:SS
+  const [TS_time, setTS_Time] = useState("");
   const [TS_cap, setTS_Cap] = useState("");            // only for 'ga'
+  const [showOppEx, setShowOppEx] = useState(false);
   const TS_open = ({ eventId, mode }) => {
     setTS_EventId(eventId);
     setTS_Mode(mode);
@@ -193,13 +194,20 @@ export default function App() {
   const recordEvent = (subjectType, subject, category, delta) => {
     const id = eid();
     const ev = { id, ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
-    setEvents(prev => [ev, ...prev]); // newest first
-    if (selectedEventId == null) {
-      setSelectedEventId(id);
-      setRemarksDraft("");
+
+    // Only store selected categories in the timeline
+    const TIMELINE_ALLOWED = new Set([...QUARTERS, "Goals Against", "Drawn Exclusions", "Timeout"]);
+    if (TIMELINE_ALLOWED.has(category)) {
+      setEvents(prev => [ev, ...prev]); // newest first
+      if (selectedEventId == null) {
+        setSelectedEventId(id);
+        setRemarksDraft("");
+      }
     }
-    return id; // important for timestamp follow-up
+
+    return id;
   };
+
 
   const selectedEvent = events.find(e => e.id === selectedEventId) || null;
   const updateSelectedRemarks = (text) => {
@@ -261,6 +269,9 @@ export default function App() {
 
     // create timeline event and keep the id
     const eventId = recordEvent("player", playerName, cat, +1);
+      if (cat === "Drawn Exclusions") {
+        TS_open({ eventId, mode: "ga" });   // same cap+time modal as Goals Against
+      }
 
     // === Shot Chart triggers ===
     if (!isGoalie) {
@@ -294,6 +305,10 @@ export default function App() {
     if (cat === HIDDEN_TILE) {
       TS_open({ eventId, mode: "ejection" });
     }
+    if (cat === "Drawn Exclusions") {
+      TS_open({ eventId, mode: "ga" });
+    }
+
   };
 
   const undoForPlayer = (playerName) => {
@@ -548,25 +563,26 @@ export default function App() {
         </div>
 
         {/* Top row (goalie OR field) */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-5 gap-2 w-full">
           {topRow.map((c) => (
             <button
               key={c}
               onClick={() => incrementStat(player.name, c)}
               className={[
-                "w-full border-2 rounded-lg p-2 flex flex-col items-center justify-center",
-                "text-center select-none transition h-16",
+                "w-full border-2 rounded-md p-2 flex flex-col items-center justify-center",
+                "text-center select-none transition h-14",
                 flashClass(player.name, c),
                 "hover:shadow active:scale-[0.99]",
               ].join(" ")}
               title={`Add 1 to ${c}`}
               aria-label={`Add 1 to ${c} for ${player.name}`}
             >
-              <span className="font-semibold text-xs">{c}</span>
-              <span className="text-lg font-extrabold">{player.stats?.[c] ?? 0}</span>
+              <span className="font-semibold text-[11px] sm:text-xs">{c}</span>
+              <span className="text-base sm:text-lg font-extrabold">{player.stats?.[c] ?? 0}</span>
             </button>
           ))}
         </div>
+
 
         {/* Core row */}
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
@@ -860,10 +876,10 @@ export default function App() {
           {needsQuarterPicker && (
             <div className="flex items-center gap-2 flex-wrap">
               <div className="text-sm font-medium" style={{ color: "var(--secondary)" }}>Quarter:</div>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-5 gap-2 w-full">
                 {QUARTERS.map(q => (
                   <button key={q}
-                    className={`px-3 py-1 rounded-lg border ${pickerQuarter === q ? "bg-gray-900 text-white" : "bg-white"}`}
+                    className={`w-full px-2 py-1 text-xs sm:text-sm rounded-md border ${pickerQuarter === q ? "bg-gray-900 text-white" : "bg-white"}`}
                     onClick={() => setPickerQuarter(q)}
                   >
                     {q}
@@ -1039,6 +1055,50 @@ export default function App() {
       </SafeModal>
     );
   };
+
+// --- Opponent Exclusions modal (top-level) ---
+function OpponentExclusionsModal() {
+  const counts = useMemo(() => {
+    const map = new Map();
+    const rx = /opp\s*cap\s*#(\d{1,2})/i;
+
+    events
+      .filter(ev => ev.category === "Drawn Exclusions" && ev.remarks)
+      .forEach(ev => {
+        const m = String(ev.remarks).match(rx);
+        if (m) {
+          const cap = m[1];
+          map.set(cap, (map.get(cap) || 0) + 1);
+        }
+      });
+
+    return Array.from(map.entries())
+      .map(([cap, n]) => ({ cap: Number(cap), n }))
+      .sort((a, b) => b.n - a.n || a.cap - b.cap);
+  }, [events]);
+
+  return (
+    <SafeModal open={showOppEx} title="Opponent Exclusions" onClose={() => setShowOppEx(false)}>
+      <div className="max-h-[70vh] overflow-auto">
+        {counts.length === 0 ? (
+          <div className="p-3 text-gray-500">No exclusions recorded yet.</div>
+        ) : (
+          <ul className="divide-y">
+            {counts.map(({ cap, n }) => (
+              <li key={cap} className="px-3 py-2 flex items-center justify-between">
+                <span className="font-medium">#{cap}</span>
+                <span className="text-sm text-gray-700">
+                  {n} {n === 1 ? "exclusion" : "exclusions"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </SafeModal>
+  );
+}
+
 
 /* =========================
    Timestamp Modal — GA flow: Cap(2) → Minute(1) → Seconds(2)
@@ -1279,27 +1339,6 @@ const onSave = () => {
   </Button>
 </div>
 
-
-      {/* Opposition Caps Grid */}
-      <Card className="shadow w-full">
-        <CardContent>
-          <div className="mb-3 font-semibold" style={{ color: "var(--secondary)" }}>Opposition Caps</div>
-          <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-12 gap-2">
-            {opponents.map((o) => (
-              <button
-                key={o.cap}
-                onClick={() => setSelectedOpp(o.cap)}
-                className="rounded-lg py-2 text-center font-bold hover:shadow active:scale-[0.99] transition"
-                style={{ background: "#b3b3b3", color: "#fff" }}
-                title={`Open stats for Opponent #${o.cap}`}
-              >
-                #{o.cap}
-              </button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Bottom action row: Timeline + Shot Charts */}
       <div className="mt-4 flex justify-center gap-2">
         <Button
@@ -1323,7 +1362,15 @@ const onSave = () => {
         >
           Goalie Shot Chart
         </Button>
-      </div>
+      
+        <Button
+          onClick={() => setShowOppEx(true)}
+          className="text-white px-4 py-2 rounded-lg"
+          style={{ background: "var(--secondary)" }}
+        >
+          Opponent Exclusions
+        </Button>
+</div>
 
       {/* Landing / Start Game Overlay */}
       <Modal open={showStart} title="Start Game" onClose={() => { /* keep explicit flow */ }}>
@@ -1471,6 +1518,8 @@ const onSave = () => {
       {/* Timeline Modal */}
       <TimelineModal />
 
+      
+  <OpponentExclusionsModal />
       {/* Timestamp Modal */}
       <TimestampModal />
 
