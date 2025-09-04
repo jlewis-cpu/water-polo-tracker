@@ -197,7 +197,7 @@ export default function App() {
     const ev = { id, ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
 
     // Only store selected categories in the timeline
-    const TIMELINE_ALLOWED = new Set([...QUARTERS, "Goals Against", "Drawn Exclusions", "Timeout"]);
+    const TIMELINE_ALLOWED = new Set([...QUARTERS, "Goals Against", "Penalties", "Ejections", "Drawn Exclusions", "Timeout"]);
     if (TIMELINE_ALLOWED.has(category)) {
       setEvents(prev => [ev, ...prev]); // newest first
       if (selectedEventId == null) {
