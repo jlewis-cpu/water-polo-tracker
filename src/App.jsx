@@ -75,6 +75,7 @@ export default function App() {
   const [TS_time, setTS_Time] = useState("");
   const [TS_cap, setTS_Cap] = useState("");            // only for 'ga'
   const [showOppEx, setShowOppEx] = useState(false);
+  const [showCougarEx, setShowCougarEx] = useState(false);
   const TS_open = ({ eventId, mode }) => {
     setTS_EventId(eventId);
     setTS_Mode(mode);
@@ -1086,8 +1087,8 @@ function OpponentExclusionsModal() {
           <ul className="divide-y">
             {counts.map(({ cap, n }) => (
               <li key={cap} className="px-3 py-2 flex items-center justify-between">
-                <span className="font-medium">#{cap}</span>
-                <span className="text-sm text-gray-700">
+                <span className="font-large">#{cap}</span>
+                <span className="text-lg text-gray-700">
                   {n} {n === 1 ? "exclusion" : "exclusions"}
                 </span>
               </li>
@@ -1099,6 +1100,39 @@ function OpponentExclusionsModal() {
   );
 }
 
+// --- Cougar Exclusions modal (players: Penalties + Ejections combined) ---
+function CougarExclusionsModal() {
+  const counts = useMemo(() => {
+    return players
+      .map(p => ({
+        name: p.name,
+        n: (p.stats?.[PENALTIES] ?? 0) + (p.stats?.[HIDDEN_TILE] ?? 0)   // HIDDEN_TILE === "Ejections"
+      }))
+      .filter(x => x.n > 0)
+      .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  }, [players]);
+
+  return (
+    <SafeModal open={showCougarEx} title="Cougar Exclusions (Penalties + Ejections)" onClose={() => setShowCougarEx(false)}>
+      <div className="max-h-[70vh] overflow-auto">
+        {counts.length === 0 ? (
+          <div className="p-3 text-gray-500">No exclusions recorded yet.</div>
+        ) : (
+          <ul className="divide-y">
+            {counts.map(({ name, n }) => (
+              <li key={name} className="px-3 py-2 flex items-center justify-between">
+                <span className="font-large">{name}</span>
+                <span className="text-lg text-gray-700">
+                  {n} {n === 1 ? "exclusion" : "exclusions"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </SafeModal>
+  );
+}
 
 /* =========================
    Timestamp Modal — GA flow: Cap(2) → Minute(1) → Seconds(2)
@@ -1344,7 +1378,7 @@ const onSave = () => {
         <Button
           onClick={() => setShowTimeline(true)}
           className="text-white px-4 py-2 rounded-lg"
-          style={{ background: "var(--primary)" }}
+          style={{ background: "var(--secondary)" }}
         >
           Timeline
         </Button>
@@ -1363,6 +1397,14 @@ const onSave = () => {
           Goalie Shot Chart
         </Button>
       
+        <Button
+          onClick={() => setShowCougarEx(true)}
+          className="text-white px-4 py-2 rounded-lg"
+          style={{ background: "var(--primary)" }}
+        >
+          Cougar Exclusions
+        </Button>
+
         <Button
           onClick={() => setShowOppEx(true)}
           className="text-white px-4 py-2 rounded-lg"
@@ -1518,8 +1560,9 @@ const onSave = () => {
       {/* Timeline Modal */}
       <TimelineModal />
 
+      <CougarExclusionsModal />
       
-  <OpponentExclusionsModal />
+      <OpponentExclusionsModal />
       {/* Timestamp Modal */}
       <TimestampModal />
 
