@@ -197,7 +197,7 @@ export default function App() {
     const ev = { id, ts: Date.now(), subjectType, subject, category, delta, remarks: "" };
 
     // Only store selected categories in the timeline
-    const TIMELINE_ALLOWED = new Set([...QUARTERS, "Goals Against", "Penalties", "Ejections", "Drawn Exclusions", "Timeout"]);
+    const TIMELINE_ALLOWED = new Set([...QUARTERS, "Goals Against", "Drawn Exclusions", "Timeout"]);
     if (TIMELINE_ALLOWED.has(category)) {
       setEvents(prev => [ev, ...prev]); // newest first
       if (selectedEventId == null) {
@@ -313,15 +313,48 @@ export default function App() {
   };
 
   const undoForPlayer = (playerName) => {
-    setHistoryByPlayer(h => {
-      const stack = [...(h[playerName] || [])];
-      if (stack.length === 0) return h;
-      const last = stack.pop();
-      bump(playerName, last.cat, -1, "undo");
-      removeLatestEvent("player", playerName, last.cat);
-      return { ...h, [playerName]: stack };
-    });
-  };
+  setHistoryByPlayer(h => {
+    const stack = [...(h[playerName] || [])];
+    if (stack.length === 0) return h;
+
+    const last = stack.pop();
+
+    // 1) Revert the player's stat
+    bump(playerName, last.cat, -1, "undo");
+
+    // 2) Remove the latest matching timeline event
+    removeLatestEvent("player", playerName, last.cat);
+
+    // 3) Keep shot lists in sync so the scoreboard updates correctly
+    if (last.cat === "Goals Against") {
+      // ✅ remove the latest GA dot for THIS goalie
+      removeLatestGoalieShot(playerName, "ga");
+    }
+
+    if (last.cat === "Saves") {
+      // ✅ optional: keep saves heatmap tidy for THIS goalie
+      removeLatestGoalieShot(playerName, "save");
+    }
+
+    // Optional (field shot chart neatness):
+    if (QUARTERS.includes(last.cat)) {
+      setSC_ShotsField(list => {
+        const arr = [...(list || [])];
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const s = arr[i];
+          if (s?.result === "made" && s?.player === playerName && s?.quarter === last.cat) {
+            arr.splice(i, 1);
+            break;
+          }
+        }
+        return arr;
+      });
+    }
+
+    return { ...h, [playerName]: stack };
+  });
+};
+
 
   // --- Opponent stat ops ---
   const bumpOpp = (cap, cat, delta, modeForFlash) => {
@@ -414,6 +447,47 @@ export default function App() {
     }));
   };
 
+// --- Scoreboard totals (live) ---
+const opponentLabel = useMemo(() => {
+  if (!gameId) return "Opponent";
+  const m = gameId.match(/vs\.?\s*(.+)$/i) || gameId.match(/@\s*(.+)$/) || gameId.match(/-\s*(.+)$/);
+  const name = m ? m[1] : gameId;
+  return (name || "Opponent").trim();
+}, [gameId]);
+
+// Remove the latest goalie-shot for a specific goalie & result ("ga" or "save")
+const removeLatestGoalieShot = (goalieName, result) => {
+  setSC_ShotsGoalie(list => {
+    const arr = [...(list || [])];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const s = arr[i];
+      if (s?.goalie === goalieName && s?.result === result) {
+        arr.splice(i, 1);
+        break;
+      }
+    }
+    return arr;
+  });
+};
+
+
+const scoreboard = useMemo(() => {
+  // Cougars per-quarter: sum players' Q1..OT
+  const cougarPerQ = QUARTERS.map(q =>
+    players.reduce((sum, p) => sum + (p.stats?.[q] ?? 0), 0)
+  );
+  const cougarTotal = cougarPerQ.reduce((a, b) => a + b, 0);
+
+  // Opponent per-quarter: count goalie shot chart "ga" by quarter
+  const oppPerQ = QUARTERS.map(q =>
+    (SC_shotsGoalie || []).filter(s => s.result === "ga" && s.quarter === q).length
+  );
+  const oppTotal = oppPerQ.reduce((a, b) => a + b, 0);
+
+  return { cougarPerQ, cougarTotal, oppPerQ, oppTotal };
+}, [players, SC_shotsGoalie]);
+
+
   // --- CSV ---
   const playerHeaders = useMemo(() => {
     const set = new Set([
@@ -457,6 +531,19 @@ export default function App() {
       return r;
     });
 
+    // --- Scoreboard CSV section ---
+    const cPerQ = QUARTERS.map(q => players.reduce((sum, p) => sum + (p.stats?.[q] ?? 0), 0));
+    const cTotal = cPerQ.reduce((a, b) => a + b, 0);
+    const oPerQ = QUARTERS.map(q => (SC_shotsGoalie || []).filter(s => s.result === "ga" && s.quarter === q).length);
+    const oTotal = oPerQ.reduce((a, b) => a + b, 0);
+
+    const scoreBlockHeader = ["SCOREBOARD"];
+    const totalHeader = ["Total", "Cougars", cTotal, opponentLabel || "Opponent", oTotal];
+    const quarterHeader = ["", ...QUARTERS]; // 6 columns: label + Q1..OT
+    const rowCougars = ["Cougars", ...cPerQ];
+    const rowOpp = [opponentLabel || "Opponent", ...oPerQ];
+
+
     // Timeline table
     const timelineHeaders = ["Time", "Type", "Subject", "Category", "Delta", "Remarks"];
     const rowsTimeline = events.map(ev => [
@@ -474,6 +561,12 @@ export default function App() {
       "",
       row(opponentHeaders),
       ...rowsOpponents.map(row),
+      "",
+      row(scoreBlockHeader),
+      row(totalHeader),
+      row(quarterHeader),
+      row(rowCougars),
+      row(rowOpp),
       "",
       row(timelineHeaders),
       ...rowsTimeline.map(row),
@@ -1350,6 +1443,57 @@ const onSave = () => {
           )}
         </CardContent>
       </Card>
+
+{/* Live Scoreboard */}
+<div className="w-full flex justify-center my-6">
+  <div className="bg-white rounded-2xl shadow p-3 sm:p-4"
+       style={{ minWidth: "min(96vw, 680px)", maxWidth: 680 }}>
+    {/* Big totals */}
+    <div className="flex items-end justify-between gap-4">
+      <div className="text-center flex-1">
+        <div className="text-sm font-semibold tracking-wide" style={{ color: "var(--secondary)" }}>
+          Cougars
+        </div>
+        <div className="text-5xl font-black leading-none">
+          {scoreboard.cougarTotal}
+        </div>
+      </div>
+      <div className="text-center flex-1">
+        <div className="text-sm font-semibold tracking-wide" style={{ color: "var(--secondary)" }}>
+          {opponentLabel}
+        </div>
+        <div className="text-5xl font-black leading-none">
+          {scoreboard.oppTotal}
+        </div>
+      </div>
+    </div>
+
+    {/* Quarter box score: 6 columns (label + 5 quarters), 2 rows */}
+    <div className="mt-4">
+      <div className="grid grid-cols-6 text-center text-xs font-semibold text-gray-600">
+        <div></div>
+        {QUARTERS.map(q => (
+          <div key={q}>{q}</div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-6 text-center mt-1">
+        <div className="text-xs font-medium">Cougars</div>
+        {QUARTERS.map((q, i) => (
+          <div key={`c-${q}`} className="text-sm">{scoreboard.cougarPerQ[i]}</div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-6 text-center mt-1">
+        <div className="text-xs font-medium">{opponentLabel}</div>
+        {QUARTERS.map((q, i) => (
+          <div key={`o-${q}`} className="text-sm">{scoreboard.oppPerQ[i]}</div>
+        ))}
+      </div>
+    </div>
+  </div>
+</div>
+
 
 {/* Timeouts row (centered, green) */}
 <div className="my-4 flex justify-center gap-3">
